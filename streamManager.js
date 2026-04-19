@@ -105,15 +105,16 @@ function startInput(inputObj) {
         lastParseTime = now;
         
         // Match FFmpeg stats
-        const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
+        const bitrateMatch = out.match(/bitrate=\s*([a-zA-Z0-9.\/]+)/);
         const timeMatch = out.match(/time=([\d:.]+)/);
         
-        if (bitrateMatch && ioInstance) {
+        if ((bitrateMatch || timeMatch) && ioInstance) {
             if (activeInputs[channel]) activeInputs[channel].lastUpdate = now;
             
             if (!telemetryCache[channel]) telemetryCache[channel] = [];
-            const brText = bitrateMatch[1];
-            const br = parseFloat(brText); // ej. "4500.5kbits/s" -> 4500.5
+            let brText = bitrateMatch ? bitrateMatch[1] : '0.0kbits/s';
+            if (brText.includes('N/A')) brText = 'VBR (N/A)';
+            const br = parseFloat(brText) || 0;
             
             telemetryCache[channel].push({ t: new Date().toLocaleTimeString(), y: br || 0 });
             if (telemetryCache[channel].length > 60) telemetryCache[channel].shift(); // Keep last 60 points
@@ -409,16 +410,17 @@ function startOutput(outputObj) {
         lastParseTime = now;
         
         const out = data.toString();
-        const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
+        const bitrateMatch = out.match(/bitrate=\s*([a-zA-Z0-9.\/]+)/);
         const timeMatch = out.match(/time=([\d:.]+)/);
         
-        if (bitrateMatch && ioInstance) {
+        if ((bitrateMatch || timeMatch) && ioInstance) {
             const outChan = 'out_' + id;
             if (activeOutputs[id]) activeOutputs[id].lastUpdate = now;
             
             if (!telemetryCache[outChan]) telemetryCache[outChan] = [];
-            const brText = bitrateMatch[1];
-            const br = parseFloat(brText); // ej. "4500.5kbits/s" -> 4500.5
+            let brText = bitrateMatch ? bitrateMatch[1] : '0.0kbits/s';
+            if (brText.includes('N/A')) brText = 'VBR (N/A)';
+            const br = parseFloat(brText) || 0;
             
             telemetryCache[outChan].push({ t: new Date().toLocaleTimeString(), y: br || 0 });
             if (telemetryCache[outChan].length > 60) telemetryCache[outChan].shift();
