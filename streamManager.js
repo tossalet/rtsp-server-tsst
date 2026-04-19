@@ -49,10 +49,9 @@ function startInput(inputObj) {
         '-fflags', '+genpts'
     ];
 
-    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes por TCP timeout)
+    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes rápidos)
     if (url.startsWith('rtsp://')) {
         args.push('-rtsp_transport', 'tcp');
-        args.push('-stimeout', '10000000'); // 10 segundos de paciencia pura para saltos Wifi
     }
 
     args.push('-i', url);
