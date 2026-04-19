@@ -105,16 +105,15 @@ function startInput(inputObj) {
         lastParseTime = now;
         
         // Match FFmpeg stats
-        const bitrateMatch = out.match(/bitrate=\s*([a-zA-Z0-9.\/]+)/);
+        const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
         const timeMatch = out.match(/time=([\d:.]+)/);
         
-        if ((bitrateMatch || timeMatch) && ioInstance) {
+        if (bitrateMatch && ioInstance) {
             if (activeInputs[channel]) activeInputs[channel].lastUpdate = now;
             
             if (!telemetryCache[channel]) telemetryCache[channel] = [];
-            let brText = bitrateMatch ? bitrateMatch[1] : '0.0kbits/s';
-            if (brText.includes('N/A')) brText = 'VBR (N/A)';
-            const br = parseFloat(brText) || 0;
+            const brText = bitrateMatch[1];
+            const br = parseFloat(brText); // ej. "4500.5kbits/s" -> 4500.5
             
             telemetryCache[channel].push({ t: new Date().toLocaleTimeString(), y: br || 0 });
             if (telemetryCache[channel].length > 60) telemetryCache[channel].shift(); // Keep last 60 points
@@ -212,11 +211,9 @@ function startInput(inputObj) {
 
     activeInputs[channel] = { process: child, router: router, lastUpdate: Date.now(), inputObj: inputObj, isStopping: false, prevProcess: null, prevPort: null };
     
-    // Start recurring poller or single grab
     if (inputObj.preview_enabled !== 0) {
         startPreview(channel, false);
     } else {
-        // Feature UX: Grab a single snapshot frame even if preview is disabled
         startPreview(channel, true);
     }
 
@@ -233,7 +230,6 @@ function startPreview(channel, singleFrame = false) {
 
     const extPath = path.join(__dirname, 'public', 'thumbs', `thumb_${channel}.jpg`);
     const ffmpegCmd = getFFmpegPath();
-    // Forzamos a que el demuxer/decoder salte toda la basura rota hasta encontrar un fotograma en la red 100% puro y clave (I-Frame)
     const args = [
         '-hide_banner', '-y',
         '-skip_frame', 'nokey',
@@ -242,10 +238,8 @@ function startPreview(channel, singleFrame = false) {
     ];
 
     if (singleFrame) {
-        // Al pedir exactamente 1 frame sin tocar el framerate, FFmpeg guardará instantáneamente la primera foto válida que descifre.
         args.push('-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath);
     } else {
-        // Modo continuo: -skip_frame nokey hará que extraiga las fotos al ritmo natural de los Keyframes de la cámara (cada 1 o 2 segs) con coste 0% CPU.
         args.push('-update', '1', '-q:v', '5', '-f', 'image2', extPath);
     }
 
@@ -257,7 +251,6 @@ function startPreview(channel, singleFrame = false) {
     });
 
     if (singleFrame) {
-        // Matar proceso después de 15 segundos (tiempo más que de sobra para extraer H265 si el GOP es muy largo)
         setTimeout(() => stopPreview(channel), 15000);
     }
 
@@ -413,17 +406,16 @@ function startOutput(outputObj) {
         lastParseTime = now;
         
         const out = data.toString();
-        const bitrateMatch = out.match(/bitrate=\s*([a-zA-Z0-9.\/]+)/);
+        const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
         const timeMatch = out.match(/time=([\d:.]+)/);
         
-        if ((bitrateMatch || timeMatch) && ioInstance) {
+        if (bitrateMatch && ioInstance) {
             const outChan = 'out_' + id;
             if (activeOutputs[id]) activeOutputs[id].lastUpdate = now;
             
             if (!telemetryCache[outChan]) telemetryCache[outChan] = [];
-            let brText = bitrateMatch ? bitrateMatch[1] : '0.0kbits/s';
-            if (brText.includes('N/A')) brText = 'VBR (N/A)';
-            const br = parseFloat(brText) || 0;
+            const brText = bitrateMatch[1];
+            const br = parseFloat(brText); // ej. "4500.5kbits/s" -> 4500.5
             
             telemetryCache[outChan].push({ t: new Date().toLocaleTimeString(), y: br || 0 });
             if (telemetryCache[outChan].length > 60) telemetryCache[outChan].shift();
