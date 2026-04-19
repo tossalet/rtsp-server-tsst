@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTSP SERVER TSST</title>
+    <!-- Google Fonts for premium typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="dashboard-wrapper">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo-container">
+                <i class="fa-solid fa-satellite-dish"></i>
+                <h2>RTSP<span> SERVER TSST</span></h2>
+                <div class="status-badge">
+                    <span class="dot"></span> Online
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" id="nav-system" onclick="switchTab('system')"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+                <a href="#" class="nav-item" id="nav-streams" onclick="switchTab('streams')"><i class="fa-solid fa-network-wired"></i> Streams</a>
+                <a href="#" class="nav-item" id="nav-analytics" onclick="switchTab('analytics')"><i class="fa-solid fa-chart-line"></i> Analytics</a>
+                <a href="#" class="nav-item" id="nav-storage" onclick="switchTab('storage')"><i class="fa-solid fa-hard-drive"></i> Storage</a>
+                <a href="#" class="nav-item" id="nav-settings" onclick="switchTab('settings')"><i class="fa-solid fa-gear"></i> Settings</a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="topbar">
+                <div class="page-title">
+                    <h1 id="topbar-title">Streams Manager</h1>
+                    <p id="topbar-subtitle">Live endpoints control panel</p>
+                </div>
+                <button class="btn-primary" id="btn-add-input" onclick="openModal('inputModal')">
+                    <i class="fa-solid fa-plus"></i> Add Input
+                </button>
+            </header>
+
+            <section class="streams-container" id="streamsContainer">
+                <!-- Dynamically populated via app.js -->
+            </section>
+            
+            <section class="storage-container" id="storageContainer" style="display:none; padding-bottom: 2rem;">
+                <div class="storage-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
+                    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; display:flex; align-items:center; gap:10px;">
+                        <i class="fa-solid fa-usb"></i> Discos Externos Conectados
+                        <button onclick="fetchStorage()" style="background:transparent; border:none; color:var(--accent-blue); cursor:pointer; margin-left:auto;"><i class="fa-solid fa-rotate-right"></i></button>
+                    </h2>
+                    <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Lista de unidades USB detectadas por el sistema listas para la grabación continua.</p>
+                    <div id="storageDisksGrid" class="analytics-grid">
+                        <!-- Discos UI -->
+                    </div>
+                </div>
+
+                <div class="storage-files" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+                        <h3 style="font-size: 1.1rem; font-weight: 600;"><i class="fa-regular fa-folder-open"></i> Explorador de Grabaciones</h3>
+                        <select id="storageDiskSelect" onchange="fetchFiles()" class="form-control" style="width:200px; padding: 5px; height: 32px; font-size: 0.8rem;">
+                            <!-- Opciones -->
+                        </select>
+                    </div>
+                    
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 0.9rem;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
+                                    <th style="padding: 10px;">Nombre</th>
+                                    <th style="padding: 10px;">Tamaño</th>
+                                    <th style="padding: 10px;">Fecha</th>
+                                    <th style="padding: 10px; text-align:right;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="storageFilesList">
+                                <!-- Archivos -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="analytics-container" id="analyticsContainer" style="display:none; padding-bottom: 2rem;">
+                <div class="analytics-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
+                    <h2>Real-Time Telemetry</h2>
+                    <p style="color:var(--text-muted); font-size: 0.9rem; margin-bottom: 0;">Monitor the live bandwidth and stability of active encoding tunnels.</p>
+                    <div id="analytics_grid" class="analytics-grid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+                <div class="chart-wrapper" style="background: var(--panel-bg); backdrop-filter: blur(16px); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--panel-border); height: 400px; display:flex; align-items:center; justify-content:center;">
+                    <canvas id="bitrateChart" style="width:100%; height:100%;"></canvas>
+                </div>
+            </section>
+            <section class="system-container" id="systemContainer">
+                <div class="storage-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
+                    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; display:flex; align-items:center; gap:10px;">
+                        <i class="fa-solid fa-gauge-high"></i> Global Dashboard
+                    </h2>
+                    <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Visión general del estado del hardware y sistema central de RTSP_SERVER_TSST.</p>
+                </div>
+                
+                <div class="system-grid">
+                    <div class="sys-card">
+                        <h3><i class="fa-solid fa-microchip"></i> CPU Load</h3>
+                        <div class="sys-value">
+                            <span id="sys_cpu" class="sys-number">--</span><span class="sys-unit">%</span>
+                        </div>
+                        <div class="sys-bar"><div class="sys-bar-fill" id="sys_cpu_bar" style="width:0%;"></div></div>
+                    </div>
+                    <div class="sys-card">
+                        <h3><i class="fa-solid fa-memory"></i> Memory RAM</h3>
+                        <div class="sys-value">
+                            <span id="sys_ram" class="sys-number">--</span><span class="sys-unit">GB / <span id="sys_ram_total">--</span> GB</span>
+                        </div>
+                        <div class="sys-bar"><div class="sys-bar-fill" id="sys_ram_bar" style="width:0%; background:var(--color-green);"></div></div>
+                    </div>
+                    <div class="sys-card">
+                        <h3><i class="fa-solid fa-satellite-dish"></i> Network IN</h3>
+                        <div class="sys-value">
+                            <span id="sys_rx" class="sys-number">--</span><span class="sys-unit">Mbps</span>
+                        </div>
+                    </div>
+                    <div class="sys-card">
+                        <h3><i class="fa-solid fa-tower-broadcast"></i> Network OUT</h3>
+                        <div class="sys-value">
+                            <span id="sys_tx" class="sys-number">--</span><span class="sys-unit">Mbps</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="system-overview-grid" style="margin-top:20px;">
+                    <div class="sys-stat-card" style="cursor:pointer;" onclick="setDashboardFilter('all')">
+                        <div class="sys-sc-title">Total Configured Routes</div>
+                        <div class="sys-sc-value" id="sys_routes_total">--</div>
+                    </div>
+                    <div class="sys-stat-card ok" style="cursor:pointer;" onclick="setDashboardFilter('active')">
+                        <div class="sys-sc-title">Active Running Streams</div>
+                        <div class="sys-sc-value" id="sys_routes_ok" style="color:var(--color-green);">--</div>
+                    </div>
+                    <div class="sys-stat-card error" style="cursor:pointer;" onclick="setDashboardFilter('offline')">
+                        <div class="sys-sc-title">Offline / Disabled</div>
+                        <div class="sys-sc-value" id="sys_routes_err" style="color:var(--color-red);">--</div>
+                    </div>
+                </div>
+
+                <div id="dashboard-filter-results" style="margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
+                    <!-- JavaScript will populate the filtered streams here -->
+                </div>
+            </section>
+            
+
+            <section class="settings-container" id="settingsContainer" style="display:none; padding-bottom: 2rem;">
+                <div class="settings-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+                    <!-- Ports Configuration -->
+                    <div class="settings-card" style="background: rgba(0,0,0,0.2); padding: 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);">
+                        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1.5rem; display:flex; align-items:center; gap:10px;">
+                            <i class="fa-solid fa-network-wired"></i> Global Port Allocations
+                            <span class="tooltip" style="cursor:help;">
+                                <i class="fa-solid fa-circle-info" style="font-size: 1rem; color: var(--accent-blue);"></i>
+                                <span class="tooltiptext" style="width: 280px; font-family: 'Inter', sans-serif; font-weight:normal; font-size:0.8rem; line-height: 1.5; text-align: left; padding: 12px; white-space: normal; text-transform:none; top: 150%; bottom: auto;">
+                                    <strong style="color:var(--accent-blue);">Multiplexor UDP Interno</strong><br><br>
+                                    El motor de este servidor asigna automáticamente un puerto UDP de transporte interno por cada canal para enrutar el tráfico ligero entre procesos locales.
+                                </span>
+                            </span>
+                        </h2>
+                        <form id="formPorts" onsubmit="savePorts(event)">
+                            <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom:1.5rem;">Reserva de puertos para recibir la señal entrante remota.</p>
+                            <input type="hidden" id="cfg_chanMin" value="1">
+                            <input type="hidden" id="cfg_chanMax" value="20000">
+                            <div class="form-group row">
+                                <div class="half">
+                                    <label>Internal UDP Range Min</label>
+                                    <input type="number" id="cfg_udpMin" required>
+                                </div>
+                                <div class="half">
+                                    <label>Internal UDP Range Max</label>
+                                    <input type="number" id="cfg_udpMax" required>
+                                </div>
+                            </div>
+                            <input type="hidden" id="cfg_rtmpPort" value="1935">
+                            <button type="submit" class="btn-primary" style="margin-top:10px;"><i class="fa-solid fa-save"></i> Apply Routing Ports</button>
+                        </form>
+                    </div>
+
+                    <!-- User Management -->
+                    <div class="settings-card" style="background: rgba(0,0,0,0.2); padding: 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                            <h2 style="font-size: 1.25rem; font-weight: 600;"><i class="fa-solid fa-users"></i> Access Control</h2>
+                            <button class="btn-primary" onclick="openModal('userModal')" style="padding: 6px 12px; font-size:0.8rem;"><i class="fa-solid fa-user-plus"></i> Añadir</button>
+                        </div>
+                        <div class="users-list" id="usersListContainer">
+                            <!-- Populated with JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal-overlay" id="inputModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Add New Input Stream</h3>
+                <button class="close-btn" onclick="closeModal('inputModal')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="formInput" onsubmit="submitInput(event)">
+                <div class="form-group">
+                    <label>Nombre del Canal</label>
+                    <input type="text" id="inp_name" placeholder="VMIX Studio 1" required>
+                    <!-- Campos extra ocultos para edición -->
+                    <input type="hidden" id="inp_is_edit" value="false">
+                    <input type="hidden" id="inp_edit_channel" value="">
+                </div>
+                <input type="hidden" id="inp_protocol" value="rtsp">
+                <input type="hidden" id="inp_mode" value="">
+                <div class="form-group" id="inp_ip_container">
+                    <label id="inp_ip_label">URL RTSP de la Cámara</label>
+                    <input type="text" id="inp_ip" placeholder="rtsp://admin:12345@192.168.1.100:554/cam/realmonitor..." required>
+                </div>
+                <input type="hidden" id="inp_port" value="">
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" onclick="closeModal('inputModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Input</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="outputModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Add Output</h3>
+                <button class="close-btn" onclick="closeModal('outputModal')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="formOutput" onsubmit="submitOutput(event)">
+                <input type="hidden" id="out_channel">
+                <input type="hidden" id="out_is_edit" value="false">
+                <input type="hidden" id="out_edit_id" value="">
+                <div class="form-group">
+                    <label>Destination Location info</label>
+                    <input type="text" id="out_location" placeholder="e.g. YouTube Push or IP Repeater">
+                </div>
+                <div class="form-group row">
+                    <div class="half">
+                        <label>Protocol</label>
+                        <select id="out_protocol" onchange="updateOutputFields()" class="form-control">
+                            <option value="srt">SRT (Push)</option>
+                            <option value="udp">UDP (Push)</option>
+                            <option value="rtmp">RTMP (Youtube/Twitch/Facebook)</option>
+                            <option value="disk">Grabar en Disco (USB Local)</option>
+                        </select>
+                    </div>
+                    <div class="half" id="out_mode_container">
+                        <label>Mode</label>
+                        <select id="out_mode" onchange="updateOutputFields()" class="form-control">
+                            <option value="caller">Caller</option>
+                            <option value="listener">Listener</option>
+                            <option value="rendezvous">Rendezvous</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group row">
+                    <div class="half" id="out_ip_container">
+                        <label id="out_ip_label">IP Destino</label>
+                        <input type="text" id="out_ip" placeholder="192.168.1.100">
+                    </div>
+                    <div class="half" id="out_port_container">
+                        <label id="out_port_label">Puerto</label>
+                        <input type="text" id="out_port" placeholder="6000">
+                    </div>
+                    <div class="half" id="out_disk_container" style="display:none;">
+                        <label id="out_disk_label">Unidad USB</label>
+                        <select id="out_disk" class="form-control" style="width:100%"></select>
+                    </div>
+                </div>
+                <div class="form-group row" id="out_vcodec_group">
+                    <div class="full" style="width:100%;">
+                        <label>Códec de Vídeo (Opciones de Transcodificación)</label>
+                        <select id="out_vcodec" class="form-control">
+                            <option value="copy" selected>Passthrough Nativo (Recomendado, 0% CPU)</option>
+                            <option value="libx264">Conversión a H.264 (¡Alto consumo de CPU!)</option>
+                            <option value="libx265">Conversión a H.265 (¡Extremo consumo de CPU!)</option>
+                        </select>
+                        <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">Cambiar a h264/h265 transcodificará la señal en vivo usando procesador de software.</small>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" onclick="closeModal('outputModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Save Output</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- User Modal -->
+    <div class="modal-overlay" id="userModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Añadir Nuevo Usuario</h3>
+                <button class="close-btn" onclick="closeModal('userModal')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="formUser" onsubmit="submitUser(event)">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="usr_username" placeholder="operador1" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="text" id="usr_password" placeholder="***" required>
+                </div>
+                <div class="form-group row">
+                    <div class="half">
+                        <label>Role</label>
+                        <select id="usr_role" class="form-control">
+                            <option value="4">Admin</option>
+                            <option value="16" selected>User</option>
+                        </select>
+                    </div>
+                    <div class="half">
+                        <label>Email</label>
+                        <input type="text" id="usr_email" placeholder="mail@mail.com">
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" onclick="closeModal('userModal')">Cancel</button>
+                    <button type="submit" class="btn-primary">Crear Cuenta</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+
+    <div class="modal-overlay" id="previewModal">
+        <div class="modal" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3 id="previewTitle">Previsualización</h3>
+                <button class="close-btn" onclick="closeModal('previewModal')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div style="padding-top:15px;">
+                <video id="previewVideo" controls style="width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);"></video>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart.js for visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

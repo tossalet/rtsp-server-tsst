@@ -1,0 +1,9 @@
+node_modules/
+ffmpeg.zip
+ffmpeg_bin/
+OnPremise-ISO/
+*.db
+*.sqlite
+log.txt
+out.log
+.env
