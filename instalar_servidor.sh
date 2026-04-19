@@ -50,7 +50,10 @@ apt-get install -y ntfs-3g exfatprogs udevil
 systemctl enable devmon@root
 systemctl start devmon@root
 
-# Descargamos la aplicación a su carpeta definitiva en linux (/opt/) desde GitHub
+# Forzar instalación de git si falló en el primer bloque
+apt-get update -qq
+apt-get install -y git
+
 echo "Copiando archivos..."
 # IMPORTANTE: Cambia esta URL por la de tu repositorio de GitHub real.
 GITHUB_REPO="https://github.com/tossalet/rtsp-server-tsst.git"
@@ -58,7 +61,7 @@ git clone $GITHUB_REPO $APP_DIR
 cd $APP_DIR
 
 echo "⚙️ Instalando dependencias de Node (npm install)..."
-npm install --production
+npm install --omit=dev
 
 # Crear archivo .env para el puerto
 echo "PORT=$WEB_PORT" > .env
