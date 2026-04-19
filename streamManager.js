@@ -49,9 +49,10 @@ function startInput(inputObj) {
         '-fflags', '+genpts'
     ];
 
-    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos)
+    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes por TCP timeout)
     if (url.startsWith('rtsp://')) {
         args.push('-rtsp_transport', 'tcp');
+        args.push('-stimeout', '10000000'); // 10 segundos de paciencia pura para saltos Wifi
     }
 
     args.push('-i', url);
@@ -373,11 +374,12 @@ function startOutput(outputObj) {
     // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
     if (format === 'mp4') {
         args.push('-bsf:a', 'aac_adtstoasc');
-        args.push('-max_muxing_queue_size', '1024'); // Prevent FFmpeg hanging on thread queue
+        args.push('-max_muxing_queue_size', '9999'); // Prevent FFmpeg hanging on thread queue with Dahua cameras
     }
     
     if (isDisk && format === 'mp4') {
         args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof'); // MP4 fragmentado rocoso
+        args.push('-fflags', '+igndts'); // Ignorar saltos de reloj
     }
     
     args.push('-f', format);
