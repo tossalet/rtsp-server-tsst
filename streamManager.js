@@ -214,15 +214,9 @@ function startInput(inputObj) {
     
     // Start recurring poller or single grab
     if (inputObj.preview_enabled !== 0) {
-        // Ejecución única inicial, y luego temporizador periódico sin dejar procesos zombis estancados en Linux
-        startPreview(channel, true);
-        activeInputs[channel].previewInterval = setInterval(() => {
-            if (activeInputs[channel] && !activeInputs[channel].prevProcess) {
-                startPreview(channel, true);
-            }
-        }, 5000);
+        startPreview(channel, false);
     } else {
-        // Grab a single snapshot frame even if preview is disabled
+        // Feature UX: Grab a single snapshot frame even if preview is disabled
         startPreview(channel, true);
     }
 
@@ -239,13 +233,21 @@ function startPreview(channel, singleFrame = false) {
 
     const extPath = path.join(__dirname, 'public', 'thumbs', `thumb_${channel}.jpg`);
     const ffmpegCmd = getFFmpegPath();
+    // Forzamos a que el demuxer/decoder salte toda la basura rota hasta encontrar un fotograma en la red 100% puro y clave (I-Frame)
     const args = [
         '-hide_banner', '-y',
         '-skip_frame', 'nokey',
         '-i', `udp://127.0.0.1:${prevPort}?overrun_nonfatal=1`,
-        '-map', '0:v?',
-        '-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath
+        '-map', '0:v?'
     ];
+
+    if (singleFrame) {
+        // Al pedir exactamente 1 frame sin tocar el framerate, FFmpeg guardará instantáneamente la primera foto válida que descifre.
+        args.push('-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath);
+    } else {
+        // Modo continuo: -skip_frame nokey hará que extraiga las fotos al ritmo natural de los Keyframes de la cámara (cada 1 o 2 segs) con coste 0% CPU.
+        args.push('-update', '1', '-q:v', '5', '-f', 'image2', extPath);
+    }
 
     const child = spawn(ffmpegCmd, args);
     activeInputs[channel].prevProcess = child;
@@ -254,8 +256,10 @@ function startPreview(channel, singleFrame = false) {
         console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
     });
 
-    // Matar proceso después de 15 segundos si se queda colgado esperando un Keyframe lejano
-    setTimeout(() => stopPreview(channel), 15000);
+    if (singleFrame) {
+        // Matar proceso después de 15 segundos (tiempo más que de sobra para extraer H265 si el GOP es muy largo)
+        setTimeout(() => stopPreview(channel), 15000);
+    }
 
     child.on('close', () => {
         if (activeInputs[channel] && activeInputs[channel].router && activeInputs[channel].prevPort === prevPort) {
@@ -283,7 +287,6 @@ function stopInput(channel) {
     if (activeInputs[channel]) {
         console.log(`[STOPPING INPUT ${channel}] Killing process and router...`);
         if (activeInputs[channel].autoRestart) clearTimeout(activeInputs[channel].autoRestart);
-        if (activeInputs[channel].previewInterval) clearInterval(activeInputs[channel].previewInterval);
         
         if (activeInputs[channel].process) {
             if (typeof activeInputs[channel].process.markIntentionalStop === 'function') {
@@ -359,7 +362,6 @@ function startOutput(outputObj) {
         '-hide_banner',
         '-y',
         '-fflags', '+genpts', // Critical for UDP to MP4 timebase
-        '-thread_queue_size', '4096', // Colchón de RAM masivo para aislar el hilo de lectura de la lentitud IO de la SD
         '-i', localUdpIn
     ];
     
@@ -374,12 +376,11 @@ function startOutput(outputObj) {
     // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
     if (format === 'mp4') {
         args.push('-bsf:a', 'aac_adtstoasc');
-        args.push('-max_muxing_queue_size', '9999'); // Prevent FFmpeg hanging on thread queue with Dahua cameras
+        args.push('-max_muxing_queue_size', '1024'); // Prevent FFmpeg hanging on thread queue
     }
     
     if (isDisk && format === 'mp4') {
         args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof'); // MP4 fragmentado rocoso
-        args.push('-fflags', '+igndts'); // Ignorar saltos de reloj
     }
     
     args.push('-f', format);
@@ -390,15 +391,14 @@ function startOutput(outputObj) {
     const child = spawn(ffmpegCmd, args);
     processStarted = true;
     
-    // Subscribe this output ONLY IF ffmpeg survives the first few seconds.
-    // Si la SD es lenta al crear el fichero, evitamos que NodeJS dispare a un puerto UDP cerrado y genere tormentas ICMP cerrando el sistema.
-    const waitTime = isDisk ? 3500 : 1500;
+    // Subscribe this output ONLY IF ffmpeg survives the first 1.5 seconds.
+    // If it dies early (e.g. bad remote RTMP) and we still subscribe, NodeJS floods a dead port causing Kernel ICMP Storms!
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
             activeInputs[channel].router.subscribers.add(localPort);
             console.log(`[OUT-${id}] Validated and successfully subscribed to local UDP ${localPort}`);
         }
-    }, waitTime);
+    }, 1500);
 
     child.on('error', (err) => {
         console.error(`[FATAL OUT-${id}] FFmpeg missing or crashed:`, err.message);
