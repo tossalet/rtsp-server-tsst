@@ -240,6 +240,7 @@ function startPreview(channel, singleFrame = false) {
     const ffmpegCmd = getFFmpegPath();
     const args = [
         '-hide_banner', '-y',
+        '-skip_frame', 'nokey',
         '-i', `udp://127.0.0.1:${prevPort}?overrun_nonfatal=1`,
         '-map', '0:v?',
         '-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath
@@ -252,8 +253,8 @@ function startPreview(channel, singleFrame = false) {
         console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
     });
 
-    // Matar proceso después de 5 segundos si se queda colgado
-    setTimeout(() => stopPreview(channel), 5000);
+    // Matar proceso después de 15 segundos si se queda colgado esperando un Keyframe lejano
+    setTimeout(() => stopPreview(channel), 15000);
 
     child.on('close', () => {
         if (activeInputs[channel] && activeInputs[channel].router && activeInputs[channel].prevPort === prevPort) {
