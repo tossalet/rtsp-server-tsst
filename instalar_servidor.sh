@@ -53,7 +53,7 @@ systemctl start devmon@root
 # Descargamos la aplicación a su carpeta definitiva en linux (/opt/) desde GitHub
 echo "Copiando archivos..."
 # IMPORTANTE: Cambia esta URL por la de tu repositorio de GitHub real.
-GITHUB_REPO="https://github.com/tossalet/app-servidor-srt.git"
+GITHUB_REPO="https://github.com/tossalet/rtsp-server-tsst.git"
 git clone $GITHUB_REPO $APP_DIR
 cd $APP_DIR
 
