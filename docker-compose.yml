@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  tsst-server:
+    build: .
+    image: tsst-server:latest
+    container_name: tsst_server
+    restart: always
+    network_mode: "host" # Crucial for SRT/UDP port allocations without heavy iptables
+    volumes:
+      - tsst_data:/usr/src/app/data
+      - /media:/media:shared # :shared Propaga los montajes USB en tiempo real desde el Linux al Docker
+    environment:
+      - NODE_ENV=production
+
+volumes:
+  tsst_data:

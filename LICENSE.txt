@@ -1,0 +1,11 @@
+Copyright (c) 2026. Todos los derechos reservados.
+
+Proporcionado por TSST.
+
+Términos y Condiciones de Uso:
+1. El código fuente, scripts, diseño, estructura y cualquier otra parte de este software constituyen propiedad intelectual exclusiva de sus creadores y propietarios legales.
+2. Queda estrictamente prohibida la copia, reproducción, modificación, distribución, venta o uso comercial o personal de este software sin autorización expresa y por escrito previa.
+3. El hecho de disponer de acceso a este código (por ejemplo, a través de la instalación en dispositivos del cliente) no otorga ninguna licencia, explícita o implícita, de uso o modificación de la propiedad intelectual.
+4. Este software se proporciona "tal cual", sin ninguna garantía expresa o implícita de ningún tipo. Los creadores no se hacen responsables de ningún daño, pérdida de datos o interrupción del servicio que provenga de su utilización.
+
+TODO USO NO AUTORIZADO ES UNA INFRACCIÓN TRATADA BAJO LAS LEYES LOCALES E INTERNACIONALES DE PROPIEDAD INTELECTUAL.
