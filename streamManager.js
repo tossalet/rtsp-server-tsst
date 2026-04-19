@@ -60,7 +60,8 @@ function startInput(inputObj) {
     args.push('-map', '0:v?');
     args.push('-map', '0:a?');
     args.push('-c:v', 'copy');
-    args.push('-c:a', 'copy');
+    args.push('-c:a', 'aac');
+    args.push('-b:a', '128k');
     if (url.startsWith('rtmp')) {
         args.push('-bsf:v', 'h264_mp4toannexb'); // Force bitstream conversion only for RTMP to avoid corrupting native SRT
     }
@@ -249,6 +250,10 @@ function startPreview(channel, singleFrame = false) {
     const child = spawn(ffmpegCmd, args);
     activeInputs[channel].prevProcess = child;
     
+    child.on('error', (err) => {
+        console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
+    });
+
     if (singleFrame) {
         // Matar proceso después de 15 segundos (tiempo más que de sobra para extraer H265 si el GOP es muy largo)
         setTimeout(() => stopPreview(channel), 15000);
