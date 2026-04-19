@@ -360,6 +360,7 @@ function startOutput(outputObj) {
         '-hide_banner',
         '-y',
         '-fflags', '+genpts', // Critical for UDP to MP4 timebase
+        '-thread_queue_size', '4096', // Colchón de RAM masivo para aislar el hilo de lectura de la lentitud IO de la SD
         '-i', localUdpIn
     ];
     
@@ -390,14 +391,15 @@ function startOutput(outputObj) {
     const child = spawn(ffmpegCmd, args);
     processStarted = true;
     
-    // Subscribe this output ONLY IF ffmpeg survives the first 1.5 seconds.
-    // If it dies early (e.g. bad remote RTMP) and we still subscribe, NodeJS floods a dead port causing Kernel ICMP Storms!
+    // Subscribe this output ONLY IF ffmpeg survives the first few seconds.
+    // Si la SD es lenta al crear el fichero, evitamos que NodeJS dispare a un puerto UDP cerrado y genere tormentas ICMP cerrando el sistema.
+    const waitTime = isDisk ? 3500 : 1500;
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
             activeInputs[channel].router.subscribers.add(localPort);
             console.log(`[OUT-${id}] Validated and successfully subscribed to local UDP ${localPort}`);
         }
-    }, 1500);
+    }, waitTime);
 
     child.on('error', (err) => {
         console.error(`[FATAL OUT-${id}] FFmpeg missing or crashed:`, err.message);
