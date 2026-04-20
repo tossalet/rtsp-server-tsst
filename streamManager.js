@@ -40,7 +40,7 @@ function startInput(inputObj) {
     }
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpOut = `udp://127.0.0.1:${udpsrv}?pkt_size=1316&buffer_size=8388608`;
+    const localUdpOut = `udp://127.0.0.1:${udpsrv}?pkt_size=1316`;
 
     // Base args: Read from URL
     const args = [
@@ -49,7 +49,7 @@ function startInput(inputObj) {
         '-fflags', '+genpts'
     ];
 
-    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos)
+    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes rápidos)
     if (url.startsWith('rtsp://')) {
         args.push('-rtsp_transport', 'tcp');
     }
@@ -60,7 +60,8 @@ function startInput(inputObj) {
     args.push('-map', '0:v?');
     args.push('-map', '0:a?');
     args.push('-c:v', 'copy');
-    args.push('-c:a', 'copy');
+    args.push('-c:a', 'aac');
+    args.push('-b:a', '128k');
     if (url.startsWith('rtmp')) {
         args.push('-bsf:v', 'h264_mp4toannexb'); // Force bitstream conversion only for RTMP to avoid corrupting native SRT
     }
@@ -213,7 +214,6 @@ function startInput(inputObj) {
     if (inputObj.preview_enabled !== 0) {
         startPreview(channel, false);
     } else {
-        // Feature UX: Grab a single snapshot frame even if preview is disabled
         startPreview(channel, true);
     }
 
@@ -232,25 +232,25 @@ function startPreview(channel, singleFrame = false) {
     const ffmpegCmd = getFFmpegPath();
     const args = [
         '-hide_banner', '-y',
-        // Forzamos a que el demuxer/decoder salte toda la basura rota hasta encontrar un fotograma en la red 100% puro y clave (I-Frame)
         '-skip_frame', 'nokey',
         '-i', `udp://127.0.0.1:${prevPort}?overrun_nonfatal=1`,
         '-map', '0:v?'
     ];
 
     if (singleFrame) {
-        // Al pedir exactamente 1 frame sin tocar el framerate, FFmpeg guardará instantáneamente la primera foto válida que descifre.
         args.push('-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath);
     } else {
-        // Modo continuo: -skip_frame nokey hará que extraiga las fotos al ritmo natural de los Keyframes de la cámara (cada 1 o 2 segs) con coste 0% CPU.
         args.push('-update', '1', '-q:v', '5', '-f', 'image2', extPath);
     }
 
     const child = spawn(ffmpegCmd, args);
     activeInputs[channel].prevProcess = child;
     
+    child.on('error', (err) => {
+        console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
+    });
+
     if (singleFrame) {
-        // Matar proceso después de 15 segundos (tiempo más que de sobra para extraer H265 si el GOP es muy largo)
         setTimeout(() => stopPreview(channel), 15000);
     }
 
@@ -319,7 +319,7 @@ function startOutput(outputObj) {
     let processStarted = false;
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&buffer_size=8388608&overrun_nonfatal=1`;
+    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&overrun_nonfatal=1`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');

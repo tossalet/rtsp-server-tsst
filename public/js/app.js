@@ -479,14 +479,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const thumbs = document.querySelectorAll('.thumb-container img');
         thumbs.forEach(img => {
             const baseSrc = img.dataset.src;
-            if (baseSrc && img.classList.contains('preview-active')) {
+            // Actualizar si el "Ojo" está activo, o si la imagen está trabada en las barras de color (para recuperar la foto inicial)
+            if (baseSrc && (img.classList.contains('preview-active') || img.src.includes('bars.svg'))) {
                 const tempImg = new Image();
                 tempImg.onload = () => { img.src = tempImg.src; };
-                tempImg.onerror = () => { img.src = '/images/bars.svg'; };
+                // Eliminamos el onerror que forzaba falsas barras rojas si coincidía que leíamos mientras ffmpeg guardaba
                 tempImg.src = `${baseSrc}?t=${Date.now()}`;
             }
         });
-    }, 5000); // refresh every 5s corresponding to ffmpeg capture rate
+    }, 4000);
 });
 
 async function fetchData() {

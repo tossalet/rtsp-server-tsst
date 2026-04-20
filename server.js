@@ -72,8 +72,8 @@ app.post('/api/inputs', (req, res) => {
             udpsrv = Math.floor(Math.random() * (max - min + 1)) + min;
         }
         
-        const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv, preview_enabled) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`;
         const params = [ url || '', name || 'Stream', provider || 'TodoStreaming', location || '', remote || '', 
                          enabled !== false ? 1 : 0, udpsrv ];
         
