@@ -190,7 +190,7 @@ function startInput(inputObj) {
 
         // Auto-Restart Logic (If not deliberately stopped by user)
         if (!intentionalStop) {
-            console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in 3s...`);
+            console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in 10s...`);
             // Turn yellow in UI (we fake an active signal with 0 bitrate)
             if (ioInstance) ioInstance.emit('stats', { channel: channel, active: true, bitrate: '0.0kbits/s', time: '--:--:--' });
             
@@ -199,9 +199,9 @@ function startInput(inputObj) {
                 activeInputs[channel].autoRestart = setTimeout(() => {
                     delete activeInputs[channel];
                     startInput(inputObj);
-                }, 3000);
+                }, 10000);
             } else if (!activeInputs[channel]) {
-                setTimeout(() => { startInput(inputObj); }, 3000);
+                setTimeout(() => { startInput(inputObj); }, 10000);
             }
         } else {
             // Intentional stop
@@ -442,14 +442,14 @@ function startOutput(outputObj) {
         
         // Auto-Restart Logic
         if (!intentionalStop) {
-            console.log(`[OUT-${id}] Connection lost or crashed. Auto-restarting target...`);
+            console.log(`[OUT-${id}] Connection lost or crashed. Auto-restarting target in 10s...`);
             if (activeOutputs[id] && activeOutputs[id].process === child) {
                 activeOutputs[id].autoRestart = setTimeout(() => {
                     delete activeOutputs[id];
                     startOutput(outputObj);
-                }, 3000);
+                }, 10000);
             } else if (!activeOutputs[id]) {
-                setTimeout(() => { startOutput(outputObj); }, 3000);
+                setTimeout(() => { startOutput(outputObj); }, 10000);
             }
         }
     });

@@ -1,8 +1,31 @@
-const si = require('systeminformation');
+const os = require('os');
 const db = require('./db');
 const streamManager = require('./streamManager');
 
 let ioInstance = null;
+let lastCpu = os.cpus();
+
+function getCpuLoad() {
+    const cpus = os.cpus();
+    let idleDiff = 0;
+    let totalDiff = 0;
+
+    for (let i = 0; i < cpus.length; i++) {
+        const cpu = cpus[i];
+        const last = lastCpu[i] || cpu;
+        
+        let total = 0, lastTotal = 0;
+        for (const type in cpu.times) total += cpu.times[type];
+        for (const type in last.times) lastTotal += last.times[type];
+        
+        idleDiff += (cpu.times.idle - last.times.idle);
+        totalDiff += (total - lastTotal);
+    }
+
+    lastCpu = cpus;
+    if (totalDiff === 0) return 0;
+    return 100 - ((idleDiff / totalDiff) * 100);
+}
 
 function setIo(io) {
     ioInstance = io;
@@ -14,10 +37,10 @@ function startMonitoring() {
         if (!ioInstance) return;
 
         try {
-            const [cpu, mem] = await Promise.all([
-                si.currentLoad(),
-                si.mem()
-            ]);
+            const currentCpuLoad = getCpuLoad();
+            const totalMem = os.totalmem();
+            const freeMem = os.freemem();
+            const usedMem = totalMem - freeMem;
 
             const netStats = streamManager.getTotalBitrates();
 
@@ -35,10 +58,10 @@ function startMonitoring() {
                     }
 
                     const stats = {
-                        cpuLoad: cpu.currentLoad.toFixed(1),
-                        memUsed: (mem.active / (1024*1024*1024)).toFixed(2), // GB
-                        memTotal: (mem.total / (1024*1024*1024)).toFixed(2), // GB
-                        memPercent: ((mem.active / mem.total) * 100).toFixed(1),
+                        cpuLoad: currentCpuLoad.toFixed(1),
+                        memUsed: (usedMem / (1024*1024*1024)).toFixed(2), // GB
+                        memTotal: (totalMem / (1024*1024*1024)).toFixed(2), // GB
+                        memPercent: ((usedMem / totalMem) * 100).toFixed(1),
                         netTx: netStats.tx, // Mbps
                         netRx: netStats.rx, // Mbps
                         streamsTotal,
