@@ -198,11 +198,11 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
 
 .left-section { display: flex; align-items: center; gap: 15px; width: 38%; }
 .left-section.sub { padding-left: 45px; }
-.btn-expand { background: none; color: var(--text-muted); width: 24px; }
+.btn-expand { background: none; color: var(--text-muted); width: 24px; flex-shrink: 0; }
 .btn-expand:hover { color: var(--bg-main); }
 
 .badge-protocol {
-    font-size: 0.7rem; font-weight: 700; padding: 4px 8px; border-radius: 4px; letter-spacing: 0.5px;
+    font-size: 0.7rem; font-weight: 700; padding: 4px 8px; border-radius: 4px; letter-spacing: 0.5px; flex-shrink: 0;
 }
 .badge-protocol.srt { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.3); }
 .badge-protocol.rtmp { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
@@ -228,7 +228,7 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
 .control-actions { display: flex; gap: 8px; align-items: center; }
 
 /* Status LED */
-.connection-led { width: 16px; height: 16px; border-radius: 50%; background: #333; display: flex; align-items: center; justify-content: center; position: relative;}
+.connection-led { width: 16px; min-width: 16px; height: 16px; min-height: 16px; aspect-ratio: 1; border-radius: 50%; background: #333; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
 .connection-led i { font-size: 8px; color: rgba(255,255,255,0.2); }
 .connection-led.active { background: var(--color-green); box-shadow: 0 0 12px var(--color-green); }
 .connection-led.error { background: var(--color-red); box-shadow: 0 0 12px var(--color-red); }
