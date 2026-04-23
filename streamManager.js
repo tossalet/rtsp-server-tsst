@@ -528,6 +528,23 @@ setInterval(() => {
     }
 }, 1000);
 
+function getTotalBitrates() {
+    let rx = 0;
+    let tx = 0;
+    for (const channel in activeInputs) {
+        if (telemetryCache[channel] && telemetryCache[channel].length > 0) {
+            rx += telemetryCache[channel][telemetryCache[channel].length - 1].y || 0;
+        }
+    }
+    for (const id in activeOutputs) {
+        const outChan = 'out_' + id;
+        if (telemetryCache[outChan] && telemetryCache[outChan].length > 0) {
+            tx += telemetryCache[outChan][telemetryCache[outChan].length - 1].y || 0;
+        }
+    }
+    return { rx: (rx / 1000).toFixed(2), tx: (tx / 1000).toFixed(2) };
+}
+
 module.exports = {
     setIo,
     startInput,
@@ -536,6 +553,7 @@ module.exports = {
     stopOutput,
     startPreview,
     stopPreview,
+    getTotalBitrates,
     activeInputs,
     activeOutputs
 };

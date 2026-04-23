@@ -1,5 +1,6 @@
 const si = require('systeminformation');
 const db = require('./db');
+const streamManager = require('./streamManager');
 
 let ioInstance = null;
 
@@ -13,21 +14,12 @@ function startMonitoring() {
         if (!ioInstance) return;
 
         try {
-            const [cpu, mem, net] = await Promise.all([
+            const [cpu, mem] = await Promise.all([
                 si.currentLoad(),
-                si.mem(),
-                si.networkStats() // Auto-detect interfaces instead of 'default' string
+                si.mem()
             ]);
 
-            let txSeq = 0, rxSeq = 0;
-            if (net && net.length > 0) {
-                net.forEach(iface => {
-                    if (iface.operstate === 'up' && iface.iface !== 'lo') {
-                        txSeq += iface.tx_sec || 0;
-                        rxSeq += iface.rx_sec || 0;
-                    }
-                });
-            }
+            const netStats = streamManager.getTotalBitrates();
 
             // Count streams logically from DB
             db.all('SELECT enabled FROM inputs', [], (err, inps) => {
@@ -47,8 +39,8 @@ function startMonitoring() {
                         memUsed: (mem.active / (1024*1024*1024)).toFixed(2), // GB
                         memTotal: (mem.total / (1024*1024*1024)).toFixed(2), // GB
                         memPercent: ((mem.active / mem.total) * 100).toFixed(1),
-                        netTx: ((txSeq * 8) / (1024*1024)).toFixed(2), // Mbps
-                        netRx: ((rxSeq * 8) / (1024*1024)).toFixed(2), // Mbps
+                        netTx: netStats.tx, // Mbps
+                        netRx: netStats.rx, // Mbps
                         streamsTotal,
                         streamsActive,
                         streamsError
