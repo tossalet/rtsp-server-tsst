@@ -374,10 +374,15 @@ function startOutput(outputObj) {
         args.push('-c:a', 'copy');
     }
     
+    args.push('-max_interleave_delta', '0'); // Prevenir que el muxer se bloquee si el audio y el video se desincronizan o faltan frames
+    args.push('-max_muxing_queue_size', '9999'); // Prevenir hangs del ffmpeg en la cola de muxing
+    
     // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
     if (format === 'mp4') {
         args.push('-bsf:a', 'aac_adtstoasc');
-        args.push('-max_muxing_queue_size', '1024'); // Prevent FFmpeg hanging on thread queue
+    } else if (format === 'mpegts') {
+        // Reducir la latencia del TS para que SRT y UDP sean en tiempo real y fluidos
+        args.push('-muxdelay', '0.1');
     }
     
     if (isDisk && format === 'mp4') {
