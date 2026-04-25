@@ -744,6 +744,8 @@ function openEditInput(channel) {
     
     document.getElementById('inp_name').value = input.name;
     document.getElementById('inp_ip').value = input.url;
+    const bufEl = document.getElementById('inp_buffer');
+    if(bufEl) bufEl.value = input.buffer || 0;
     
     updateInputFields();
     
@@ -926,7 +928,8 @@ async function submitInput(e) {
 
     const data = {
         name: document.getElementById('inp_name').value,
-        url: outUrl
+        url: outUrl,
+        buffer: parseInt(document.getElementById('inp_buffer').value) || 0
     };
     
     const isEdit = document.getElementById('inp_is_edit').value === 'true';
