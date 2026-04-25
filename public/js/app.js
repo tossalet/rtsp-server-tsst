@@ -976,7 +976,8 @@ async function submitOutput(e) {
         const mode = document.getElementById('out_mode').value;
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
         if(!port) { alert('El puerto es obligatorio'); return; }
-        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316`;
+        // Se añade pkt_size=1316 (estándar MTU para MPEG-TS) y latency=200000 (200ms) para absorber micro-jitter de red y CPU
+        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=200000`;
     } else {
         const ip = document.getElementById('out_ip').value || '127.0.0.1';
         if(!port) { alert('El puerto es obligatorio'); return; }
