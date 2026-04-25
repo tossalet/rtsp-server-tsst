@@ -540,7 +540,7 @@ function renderStreams() {
 
         const inputHTML = `
             <div class="stream-card ${isExpandedClass}" id="input-card-${input.channel}">
-                <div class="stream-header">
+                <div class="stream-header" style="cursor: pointer;" onclick="if(event.target.closest('.control-actions') || event.target.closest('button') || event.target.tagName === 'BUTTON') return; toggleExpand(${input.channel})">
                     <div class="left-section">
                         <button class="btn-expand" onclick="toggleExpand(${input.channel})"><i class="fa-solid fa-chevron-down"></i></button>
                         <div id="led-${input.channel}" class="connection-led ${input.enabled ? 'active yellow' : 'error'} tooltip">
