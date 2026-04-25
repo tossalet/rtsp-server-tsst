@@ -107,8 +107,30 @@ app.post('/api/inputs/:channel/toggle', (req, res) => {
                 db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], (err, newRow) => {
                    if (newRow) streamManager.startInput(newRow);
                 });
+                
+                // Memory Feature: Restore previously active outputs
+                db.all('SELECT * FROM outputs WHERE channel = ? AND was_enabled = 1', [channelId], (err, outputs) => {
+                    if (outputs && outputs.length > 0) {
+                        db.run('UPDATE outputs SET enabled = 1, was_enabled = 0 WHERE channel = ? AND was_enabled = 1', [channelId], () => {
+                            io.emit('db_update', { event: 'outputs_changed' });
+                            // The startOutput will fail if input isn't fully bound yet, but streamManager auto-recovers orphaned outputs!
+                            // Actually streamManager startOutput waits 1.5s then connects to input router, so it works.
+                            outputs.forEach(outRow => streamManager.startOutput(outRow));
+                        });
+                    }
+                });
             } else {
                 streamManager.stopInput(channelId);
+                
+                // Memory Feature: Save active outputs and disable them
+                db.all('SELECT * FROM outputs WHERE channel = ? AND enabled = 1', [channelId], (err, outputs) => {
+                    if (outputs && outputs.length > 0) {
+                        db.run('UPDATE outputs SET was_enabled = 1, enabled = 0 WHERE channel = ? AND enabled = 1', [channelId], () => {
+                            io.emit('db_update', { event: 'outputs_changed' });
+                            outputs.forEach(outRow => streamManager.stopOutput(outRow.id));
+                        });
+                    }
+                });
             }
         });
     });
@@ -221,7 +243,7 @@ app.post('/api/outputs/:id/toggle', (req, res) => {
     db.get('SELECT * FROM outputs WHERE id = ?', [id], (err, row) => {
         if (err || !row) return res.status(404).json({ error: 'Not found' });
         const newEnabled = row.enabled ? 0 : 1;
-        db.run('UPDATE outputs SET enabled = ? WHERE id = ?', [newEnabled, id], function(err) {
+        db.run('UPDATE outputs SET enabled = ?, was_enabled = 0 WHERE id = ?', [newEnabled, id], function(err) {
             io.emit('db_update', { event: 'output_toggled', id: id, enabled: newEnabled });
             res.json({ enabled: newEnabled });
             if (newEnabled) {
