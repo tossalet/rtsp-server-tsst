@@ -325,7 +325,8 @@ function startOutput(outputObj) {
     let processStarted = false;
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&overrun_nonfatal=1`;
+    // Aumentamos los buffers de recepción UDP local y la cola FIFO para evitar cortes si hay pequeños picos de CPU o latencia de I/O
+    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&overrun_nonfatal=1&fifo_size=100000&buffer_size=8388608`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
@@ -361,6 +362,7 @@ function startOutput(outputObj) {
         '-hide_banner',
         '-y',
         '-fflags', '+genpts', // Critical for UDP to MP4 timebase
+        '-thread_queue_size', '4096', // Evita que el hilo de lectura UDP dropee paquetes si la escritura a disco o SRT se atasca
         '-i', localUdpIn
     ];
     
