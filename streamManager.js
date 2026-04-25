@@ -49,6 +49,12 @@ function startInput(inputObj) {
         '-fflags', '+genpts'
     ];
 
+    // Editable Buffer para entrada
+    if (inputObj.buffer && inputObj.buffer > 0) {
+        // En UDP/RTSP previene smearing/artifacts ajustando la recolección
+        args.push('-buffer_size', `${inputObj.buffer}M`);
+    }
+
     // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes rápidos)
     if (url.startsWith('rtsp://')) {
         args.push('-rtsp_transport', 'tcp');

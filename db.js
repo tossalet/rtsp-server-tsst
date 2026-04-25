@@ -33,11 +33,13 @@ function initDB() {
             wtdgsecs INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             udpsrv INTEGER NOT NULL DEFAULT 0,
-            preview_enabled INTEGER NOT NULL DEFAULT 1
+            preview_enabled INTEGER NOT NULL DEFAULT 1,
+            buffer INTEGER NOT NULL DEFAULT 0
         )`);
 
         // Migration for inputs
         db.run("ALTER TABLE inputs ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 1", () => {});
+        db.run("ALTER TABLE inputs ADD COLUMN buffer INTEGER NOT NULL DEFAULT 0", () => {});
 
         // Table outputs
         db.run(`CREATE TABLE IF NOT EXISTS outputs (

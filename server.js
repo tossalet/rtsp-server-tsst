@@ -61,7 +61,7 @@ app.get('/api/inputs', (req, res) => {
 });
 
 app.post('/api/inputs', (req, res) => {
-    const { url, name, provider, location, remote, audiowtdg, wtdgsecs, enabled } = req.body;
+    const { url, name, provider, location, remote, audiowtdg, wtdgsecs, enabled, buffer } = req.body;
     
     // Asignar Udpsrv respetando los límites de Firewall (Settings)
     db.get('SELECT udpMin, udpMax FROM ports LIMIT 1', [], (err, ports) => {
@@ -72,10 +72,10 @@ app.post('/api/inputs', (req, res) => {
             udpsrv = Math.floor(Math.random() * (max - min + 1)) + min;
         }
         
-        const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv, preview_enabled) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`;
+        const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv, preview_enabled, buffer) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`;
         const params = [ url || '', name || 'Stream', provider || 'TodoStreaming', location || '', remote || '', 
-                         enabled !== false ? 1 : 0, udpsrv ];
+                         enabled !== false ? 1 : 0, udpsrv, buffer || 0 ];
         
         db.run(query, params, function(err) {
             if (err) return res.status(500).json({ error: err.message });
@@ -144,10 +144,10 @@ app.post('/api/inputs/:channel/snapshot', (req, res) => {
 
 app.put('/api/inputs/:channel', (req, res) => {
     const channelId = req.params.channel;
-    const { url, name } = req.body;
-    const query = `UPDATE inputs SET url = ?, name = ? WHERE channel = ?`;
+    const { url, name, buffer } = req.body;
+    const query = `UPDATE inputs SET url = ?, name = ?, buffer = ? WHERE channel = ?`;
     
-    db.run(query, [url, name, channelId], function(err) {
+    db.run(query, [url, name, buffer || 0, channelId], function(err) {
         if (err) return res.status(500).json({ error: err.message });
         
         // Restart the process if it was running with new data
