@@ -40,7 +40,7 @@ function startInput(inputObj) {
     }
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpOut = `udp://127.0.0.1:${udpsrv}?pkt_size=1316`;
+    const localTcpOut = `tcp://127.0.0.1:${udpsrv}`;
 
     // Base args: Read from URL
     const args = [
@@ -62,7 +62,7 @@ function startInput(inputObj) {
 
     args.push('-i', url);
 
-    // Main Output: copy codec, output to local MPEG-TS UDP
+    // Main Output: copy codec, output to local MPEG-TS TCP
     args.push('-map', '0:v?');
     args.push('-map', '0:a?');
     args.push('-c:v', 'copy');
@@ -73,7 +73,7 @@ function startInput(inputObj) {
     }
     args.push('-f', 'mpegts');
     args.push('-muxdelay', '0.1'); // Fix TS mux errors with missing audio/video sync
-    args.push(localUdpOut);
+    args.push(localTcpOut);
 
     // Visual Preview Generation is now strictly decoupled into its own independent ffmpeg process!
 
@@ -135,48 +135,34 @@ function startInput(inputObj) {
         }
     });
 
-    // Setup UDP Multiplexer in Node.js
-    const router = dgram.createSocket('udp4');
-    const sender = dgram.createSocket('udp4'); // DEDICATED TX SOCKET to prevent ICMP Error poisoning!
+    // Setup TCP Multiplexer in Node.js (Eliminates UDP packet loss on loopback completely)
+    const net = require('net');
+    const router = net.createServer((socket) => {
+        socket.on('data', (data) => {
+            for (const sub of router.subscribers) {
+                // Backpressure protection: Drop slow clients to prevent Node OOM
+                if (sub.writableLength > 4 * 1024 * 1024) {
+                    sub.destroy();
+                    router.subscribers.delete(sub);
+                    console.log(`[ROUTER ${channel}] Killed slow subscriber to prevent memory leak.`);
+                } else {
+                    sub.write(data);
+                }
+            }
+        });
+        socket.on('error', () => {});
+    });
     router.subscribers = new Set();
     
-    // Auto-tune sending buffer for the dedicated TX socket
-    try { sender.setSendBufferSize(8388608); } catch(e){}
-
-    // Recover existing active outputs if this is a restart
-    for (const outId in activeOutputs) {
-        if (activeOutputs[outId].parentChannel === channel) {
-            router.subscribers.add(activeOutputs[outId].localPort);
-            console.log(`[ROUTER] Re-linked orphan output ${outId} (port ${activeOutputs[outId].localPort}) to Input ${channel}`);
-        }
-    }
-    
     // Bind to the udpsrv generated port to receive FFmpeg feed
-    router.bind(udpsrv, '127.0.0.1', () => {
-        try { router.setRecvBufferSize(8388608); } catch(e){} // 8MB buffer to prevent Node UDP packet drop
-        console.log(`[ROUTER] Channel ${channel} bound on UDP ${udpsrv}`);
+    router.listen(udpsrv, '127.0.0.1', () => {
+        console.log(`[ROUTER] Channel ${channel} bound on TCP ${udpsrv}`);
     });
     
-    // Error boundary fatal para ENOBUFS en Raspberry
     router.on('error', (err) => {
-        console.error(`[ROUTER ${channel}] UDP Socket Error (Kernel buffer full?):`, err.message);
+        console.error(`[ROUTER ${channel}] TCP Socket Error:`, err.message);
     });
 
-    // Multiplex payload to all subscribers using the isolated DEDICATED TX SOCKET
-    // Highly optimized using empty fallback callback instead of try/catch to avoid V8 de-optimization
-    const noop = () => {};
-    router.on('message', (msg) => {
-        for (const port of router.subscribers) {
-            sender.send(msg, port, '127.0.0.1', noop);
-        }
-    });
-
-    // Swallow async datagram errors
-    router.on('error', (err) => {});
-    sender.on('error', (err) => {
-        // ICMP Port Unreachable errors land here cleanly, without poisoning the router RX loop!
-    });
-    
     let intentionalStop = false;
     child.markIntentionalStop = () => { intentionalStop = true; };
 
@@ -232,14 +218,13 @@ function startPreview(channel, singleFrame = false) {
 
     const prevPort = 30000 + Math.floor(Math.random() * 30000);
     activeInputs[channel].prevPort = prevPort;
-    activeInputs[channel].router.subscribers.add(prevPort);
 
     const extPath = path.join(__dirname, 'public', 'thumbs', `thumb_${channel}.jpg`);
     const ffmpegCmd = getFFmpegPath();
     const args = [
         '-hide_banner', '-y',
         '-skip_frame', 'nokey',
-        '-i', `udp://127.0.0.1:${prevPort}?overrun_nonfatal=1`,
+        '-i', `tcp://127.0.0.1:${prevPort}?listen`,
         '-map', '0:v?'
     ];
 
@@ -256,16 +241,28 @@ function startPreview(channel, singleFrame = false) {
         console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
     });
 
+    // Connect Node to the FFmpeg preview TCP listener
+    setTimeout(() => {
+        if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
+            const net = require('net');
+            const sock = new net.Socket();
+            sock.connect(prevPort, '127.0.0.1', () => {
+                activeInputs[channel].router.subscribers.add(sock);
+            });
+            sock.on('error', () => { activeInputs[channel].router.subscribers.delete(sock); });
+            sock.on('close', () => { activeInputs[channel].router.subscribers.delete(sock); });
+            activeInputs[channel].prevSocket = sock;
+        }
+    }, 1500);
+
     if (singleFrame) {
         setTimeout(() => stopPreview(channel), 15000);
     }
 
     child.on('close', () => {
-        if (activeInputs[channel] && activeInputs[channel].router && activeInputs[channel].prevPort === prevPort) {
-            activeInputs[channel].router.subscribers.delete(prevPort);
-            if (activeInputs[channel].prevProcess === child) {
-                activeInputs[channel].prevProcess = null;
-            }
+        if (activeInputs[channel]) {
+            if (activeInputs[channel].prevSocket) activeInputs[channel].prevSocket.destroy();
+            if (activeInputs[channel].prevProcess === child) activeInputs[channel].prevProcess = null;
         }
     });
 }
@@ -274,7 +271,10 @@ function stopPreview(channel) {
     const inp = activeInputs[channel];
     if (inp && inp.prevProcess) {
         inp.prevProcess.kill('SIGKILL');
-        if (inp.router && inp.prevPort) inp.router.subscribers.delete(inp.prevPort);
+        if (inp.prevSocket) {
+            inp.prevSocket.destroy();
+            if (inp.router) inp.router.subscribers.delete(inp.prevSocket);
+        }
         inp.prevProcess = null;
     }
 }
@@ -325,8 +325,8 @@ function startOutput(outputObj) {
     let processStarted = false;
 
     const ffmpegCmd = getFFmpegPath();
-    // Aumentamos los buffers de recepción UDP local y la cola FIFO para evitar cortes si hay pequeños picos de CPU o latencia de I/O
-    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&overrun_nonfatal=1&fifo_size=100000&buffer_size=8388608`;
+    // Migrado a TCP para evitar el límite de buffer de 64KB de Windows UDP que causaba pérdida de frames en local
+    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
@@ -362,8 +362,8 @@ function startOutput(outputObj) {
         '-hide_banner',
         '-y',
         '-fflags', '+genpts', // Critical for UDP to MP4 timebase
-        '-thread_queue_size', '4096', // Evita que el hilo de lectura UDP dropee paquetes si la escritura a disco o SRT se atasca
-        '-i', localUdpIn
+        '-thread_queue_size', '4096', // Evita que el hilo de lectura TCP dropee paquetes si la escritura a disco o SRT se atasca
+        '-i', localTcpIn
     ];
     
     if (vcodec === 'copy') {
@@ -398,11 +398,18 @@ function startOutput(outputObj) {
     processStarted = true;
     
     // Subscribe this output ONLY IF ffmpeg survives the first 1.5 seconds.
-    // If it dies early (e.g. bad remote RTMP) and we still subscribe, NodeJS floods a dead port causing Kernel ICMP Storms!
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
-            activeInputs[channel].router.subscribers.add(localPort);
-            console.log(`[OUT-${id}] Validated and successfully subscribed to local UDP ${localPort}`);
+            const net = require('net');
+            const sock = new net.Socket();
+            sock.connect(localPort, '127.0.0.1', () => {
+                activeInputs[channel].router.subscribers.add(sock);
+                console.log(`[OUT-${id}] Validated and successfully subscribed to local TCP ${localPort}`);
+            });
+            sock.on('error', () => { activeInputs[channel].router.subscribers.delete(sock); });
+            sock.on('close', () => { activeInputs[channel].router.subscribers.delete(sock); });
+            
+            if (activeOutputs[id]) activeOutputs[id].tcpSocket = sock;
         }
     }, 1500);
 
@@ -448,9 +455,13 @@ function startOutput(outputObj) {
 
     child.on('close', (code) => {
         console.log(`Output ${id} exited with code ${code}`);
-        // Remove subscriber port
-        if (activeInputs[channel] && activeInputs[channel].router) {
-            activeInputs[channel].router.subscribers.delete(localPort);
+        
+        // Remove subscriber socket
+        if (activeOutputs[id] && activeOutputs[id].tcpSocket) {
+            activeOutputs[id].tcpSocket.destroy();
+            if (activeInputs[channel] && activeInputs[channel].router) {
+                activeInputs[channel].router.subscribers.delete(activeOutputs[id].tcpSocket);
+            }
         }
         
         // Auto-Restart Logic
@@ -485,10 +496,13 @@ function stopOutput(id) {
             process.kill('SIGKILL');
         }
         
-        // Unsubscribe from router
-        if (activeInputs[parentChannel] && activeInputs[parentChannel].router) {
-            activeInputs[parentChannel].router.subscribers.delete(localPort);
+        if (activeOutputs[id].tcpSocket) {
+            activeOutputs[id].tcpSocket.destroy();
+            if (activeInputs[parentChannel] && activeInputs[parentChannel].router) {
+                activeInputs[parentChannel].router.subscribers.delete(activeOutputs[id].tcpSocket);
+            }
         }
+        
         delete activeOutputs[id];
         return true;
     }
