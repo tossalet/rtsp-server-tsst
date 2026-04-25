@@ -976,7 +976,7 @@ async function submitOutput(e) {
         const mode = document.getElementById('out_mode').value;
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
         if(!port) { alert('El puerto es obligatorio'); return; }
-        outUrl = `srt://${ip}:${port}?mode=${mode}`;
+        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316`;
     } else {
         const ip = document.getElementById('out_ip').value || '127.0.0.1';
         if(!port) { alert('El puerto es obligatorio'); return; }
