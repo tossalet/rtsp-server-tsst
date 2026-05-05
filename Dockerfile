@@ -11,9 +11,6 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     curl \
     intel-media-va-driver \
-    intel-media-va-driver-non-free \
-    libvpl2 \
-    libmfxgen1 \
     vainfo \
     && rm -rf /var/lib/apt/lists/*
 
