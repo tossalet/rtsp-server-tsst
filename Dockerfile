@@ -25,16 +25,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── App: directorio de trabajo ────────────────────────────────
 WORKDIR /usr/src/app
 
-# ── App: instalar dependencias npm (SOLO package.json primero) ─
-# Este paso se hace ANTES de copiar el código fuente.
-# Así las dependencias nativas (sqlite3) se compilan para Linux.
+# ── App: instalar dependencias npm ────────────────────────────
+# Se copia SOLO el package.json primero para aprovechar la caché de Docker.
+# Las dependencias nativas (sqlite3, ws) se compilan para Linux aquí.
 COPY package*.json ./
 RUN npm install --omit=dev
 
 # ── App: copiar el código fuente ──────────────────────────────
-# node_modules ya existe y es Linux-nativo, no se sobreescribe.
+# Se copian los archivos del servidor explícitamente (node_modules se ignora via .dockerignore)
 COPY server.js ./
 COPY streamManager.js ./
+COPY sysMonitor.js ./
+COPY db.js ./
 COPY public ./public/
 
 # ── Red: puertos expuestos ────────────────────────────────────
