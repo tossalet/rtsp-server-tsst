@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     intel-media-va-driver \
     intel-media-va-driver-non-free \
-    libmfx1 \
+    libvpl2 \
+    libmfxgen1 \
     vainfo \
     && rm -rf /var/lib/apt/lists/*
 
