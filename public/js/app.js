@@ -266,12 +266,39 @@ function toggleAnalyticsChannel(channelId) {
     updateTelemetryChart();
 }
 
+function appendLogToViewer(logEntry) {
+    const viewer = document.getElementById('log-viewer');
+    if (!viewer) return;
+    
+    if (viewer.innerHTML.includes('Waiting for logs...')) viewer.innerHTML = '';
+    
+    const color = logEntry.level === 'ERROR' ? '#ef4444' : '#34d399';
+    const entryDiv = document.createElement('div');
+    entryDiv.style.marginBottom = '4px';
+    
+    // Escapar tags HTML del mensaje por seguridad y formatear
+    const safeMsg = logEntry.message ? logEntry.message.replace(/</g, "&lt;").replace(/>/g, "&gt;") : '';
+    entryDiv.innerHTML = `<span style="color:#6b7280;">[${logEntry.timestamp}]</span> <span style="color:${color}; font-weight:bold;">[${logEntry.level}]</span> <span style="word-break: break-all;">${safeMsg}</span>`;
+    
+    viewer.appendChild(entryDiv);
+    // Auto-scroll si está abajo del todo
+    viewer.scrollTop = viewer.scrollHeight;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     switchTab('system'); // Iniciar en el Dashboard
     fetchData();
     initChart();
+    
+    fetch('/api/logs').then(r => r.json()).then(logs => {
+        logs.forEach(l => appendLogToViewer(l));
+    }).catch(e => console.error("Error loading logs", e));
 
     // Socket listeners
+    socket.on('server_log', (logEntry) => {
+        appendLogToViewer(logEntry);
+    });
+
     socket.on('db_update', (data) => {
         console.log("DB Update:", data.event);
         
@@ -453,6 +480,20 @@ document.addEventListener('DOMContentLoaded', () => {
             cpuLabel.innerText = stats.cpuLoad;
             cpuBar.style.width = stats.cpuLoad + '%';
             cpuBar.style.background = stats.cpuLoad > 85 ? 'var(--color-red)' : 'var(--accent-blue)';
+        }
+        
+        // Temperature
+        const tempEl = document.getElementById('sys_temp');
+        if (tempEl) {
+            tempEl.innerText = stats.cpuTemp !== undefined && stats.cpuTemp !== '--' ? stats.cpuTemp + ' °C' : '-- °C';
+            if (stats.cpuTemp !== undefined && stats.cpuTemp !== '--') {
+                const t = parseFloat(stats.cpuTemp);
+                if (t >= 80) tempEl.style.color = 'var(--color-red)';
+                else if (t >= 70) tempEl.style.color = 'var(--color-yellow)';
+                else tempEl.style.color = 'var(--color-green)';
+            } else {
+                tempEl.style.color = 'inherit';
+            }
         }
         
         // RAM

@@ -142,7 +142,7 @@ function startInput(inputObj) {
         socket.on('data', (data) => {
             for (const sub of router.subscribers) {
                 // Backpressure protection: Drop slow clients to prevent Node OOM
-                if (sub.writableLength > 4 * 1024 * 1024) {
+                if (sub.writableLength > 256 * 1024 * 1024) {
                     sub.destroy();
                     router.subscribers.delete(sub);
                     console.log(`[ROUTER ${channel}] Killed slow subscriber to prevent memory leak.`);
@@ -154,14 +154,29 @@ function startInput(inputObj) {
         socket.on('error', () => {});
     });
     router.subscribers = new Set();
+    router.port = udpsrv;
     
     // Bind to the udpsrv generated port to receive FFmpeg feed
-    router.listen(udpsrv, '127.0.0.1', () => {
+    let _routerRetries = 0;
+    const _routerBind = () => router.listen(udpsrv, '127.0.0.1', () => {
         console.log(`[ROUTER] Channel ${channel} bound on TCP ${udpsrv}`);
     });
+    _routerBind();
     
     router.on('error', (err) => {
-        console.error(`[ROUTER ${channel}] TCP Socket Error:`, err.message);
+        if (err.code === 'EADDRINUSE') {
+            _routerRetries++;
+            if (_routerRetries > 6) {
+                console.error(`[ROUTER ${channel}] Port ${udpsrv} permanently busy after ${_routerRetries} retries. Giving up.`);
+                return;
+            }
+            console.log(`[ROUTER ${channel}] Port ${udpsrv} busy (TIME_WAIT), retry ${_routerRetries}/6 in 5s...`);
+            setTimeout(() => {
+                try { router.close(() => _routerBind()); } catch(e) { _routerBind(); }
+            }, 5000);
+        } else {
+            console.error(`[ROUTER ${channel}] TCP Socket Error:`, err.message);
+        }
     });
 
     let intentionalStop = false;
@@ -346,14 +361,17 @@ function startOutput(outputObj) {
         const lastSlash = Math.max(destUrl.lastIndexOf('/'), destUrl.lastIndexOf('\\'));
         const lastDot = destUrl.lastIndexOf('.');
         
-        if (lastDot > lastSlash) {
-            destUrl = destUrl.substring(0, lastDot) + '_' + df + destUrl.substring(lastDot);
-        } else {
-            destUrl += '_' + df + '.mp4';
+        if (!destUrl.toLowerCase().endsWith('.m3u8')) {
+            if (lastDot > lastSlash) {
+                destUrl = destUrl.substring(0, lastDot) + '_' + df + destUrl.substring(lastDot);
+            } else {
+                destUrl += '_' + df + '.mp4';
+            }
         }
 
         if (destUrl.toLowerCase().endsWith('.ts')) format = 'mpegts';
         else if (destUrl.toLowerCase().endsWith('.mkv')) format = 'matroska';
+        else if (destUrl.toLowerCase().endsWith('.m3u8')) format = 'hls';
         else format = 'mp4';
     }
 
@@ -369,16 +387,29 @@ function startOutput(outputObj) {
     
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
+    } else if (vcodec === 'h264_qsv' || vcodec === 'hevc_qsv') {
+        // Hardware Acceleration Intel UHD 630
+        args.push('-c:v', vcodec);
+        args.push('-preset', 'veryfast');
+        args.push('-global_quality', '23'); // Alternativa a CRF para Intel QSV
+        args.push('-look_ahead', '0'); // Baja latencia
+        args.push('-g', '25'); // Keyframe cada 25 frames
+        args.push('-c:a', 'aac');
+        args.push('-b:a', '128k');
     } else {
         args.push('-c:v', vcodec);
         args.push('-preset', 'ultrafast');
-        args.push('-c:a', 'copy');
+        args.push('-crf', '23');
+        args.push('-g', '25');         // Force keyframe every 25 frames
+        args.push('-sc_threshold', '0'); // Disable scene-change keyframes
+        args.push('-c:a', 'aac');
+        args.push('-b:a', '128k');
     }
     
     args.push('-max_muxing_queue_size', '9999'); // Prevenir hangs del ffmpeg en la cola de muxing
     
     // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
-    if (format === 'mp4') {
+    if (format === 'mp4' || format === 'hls') {
         args.push('-bsf:a', 'aac_adtstoasc');
     } else if (format === 'mpegts') {
         // Aumentar el delay y preload a 500ms para garantizar un pacing (PCR) perfecto hacia vMix sin tirones
@@ -390,7 +421,14 @@ function startOutput(outputObj) {
         args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof'); // MP4 fragmentado rocoso
     }
     
-    args.push('-f', format);
+    if (format === 'hls') {
+        args.push('-hls_time', '2');       // 2s segments = faster live edge
+        args.push('-hls_list_size', '0'); // Keep all segments for replay
+        args.push('-hls_segment_type', 'mpegts');
+        args.push('-f', 'hls');
+    } else {
+        args.push('-f', format);
+    }
     args.push(destUrl);
 
     console.log(`[STARTING OUTPUT ${id}] ${ffmpegCmd} ${args.join(' ')}`);
@@ -402,13 +440,20 @@ function startOutput(outputObj) {
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
             const net = require('net');
-            const sock = new net.Socket();
-            sock.connect(localPort, '127.0.0.1', () => {
-                activeInputs[channel].router.subscribers.add(sock);
+            // Test connection to verify port is alive before letting ffmpeg connect
+            const sock = net.createConnection(localPort, '127.0.0.1', () => {
                 console.log(`[OUT-${id}] Validated and successfully subscribed to local TCP ${localPort}`);
+                activeInputs[channel].router.subscribers.add(sock);
+                activeOutputs[id].tcpSocket = sock;
             });
-            sock.on('error', () => { activeInputs[channel].router.subscribers.delete(sock); });
-            sock.on('close', () => { activeInputs[channel].router.subscribers.delete(sock); });
+            sock.on('error', () => {
+                console.log(`[OUT-${id}] Router port ${localPort} unreachable. FFmpeg will fail.`);
+            });
+            sock.on('close', () => { 
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.delete(sock); 
+                }
+            });
             
             if (activeOutputs[id]) activeOutputs[id].tcpSocket = sock;
         }

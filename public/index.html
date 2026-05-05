@@ -111,6 +111,10 @@
                             <span id="sys_cpu" class="sys-number">--</span><span class="sys-unit">%</span>
                         </div>
                         <div class="sys-bar"><div class="sys-bar-fill" id="sys_cpu_bar" style="width:0%;"></div></div>
+                        <div style="margin-top: 10px; font-size: 0.8rem; color: var(--text-muted); display:flex; justify-content:space-between; align-items:center;">
+                            <span><i class="fa-solid fa-temperature-half"></i> Temp</span>
+                            <span id="sys_temp" style="font-weight:bold; color:var(--text-main);">-- °C</span>
+                        </div>
                     </div>
                     <div class="sys-card">
                         <h3><i class="fa-solid fa-memory"></i> Memory RAM</h3>
@@ -145,6 +149,17 @@
                     <div class="sys-stat-card error" style="cursor:pointer;" onclick="setDashboardFilter('offline')">
                         <div class="sys-sc-title">Offline / Disabled</div>
                         <div class="sys-sc-value" id="sys_routes_err" style="color:var(--color-red);">--</div>
+                    </div>
+                </div>
+
+                <!-- NEW LOG VIEWER -->
+                <div class="sys-card" style="margin-top: 1.5rem; border-color: rgba(96, 165, 250, 0.2);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <h3 style="margin-bottom:0;"><i class="fa-solid fa-terminal"></i> Live System Logs</h3>
+                        <a href="/api/logs/download" target="_blank" class="btn-secondary" style="font-size:0.8rem; text-decoration:none;"><i class="fa-solid fa-download"></i> Download TXT</a>
+                    </div>
+                    <div id="log-viewer" style="background:#0a0a0a; border:1px solid rgba(255,255,255,0.05); padding:12px; height:250px; overflow-y:auto; border-radius:6px; font-family:monospace; font-size:0.75rem; color:#d1d5db; line-height:1.5;">
+                        <div style="color:var(--text-muted);">Waiting for logs...</div>
                     </div>
                 </div>
 
@@ -291,6 +306,8 @@
                         <label>Códec de Vídeo (Opciones de Transcodificación)</label>
                         <select id="out_vcodec" class="form-control">
                             <option value="copy" selected>Passthrough Nativo (Recomendado, 0% CPU)</option>
+                            <option value="h264_qsv">Aceleración HW a H.264 (Intel UHD QSV)</option>
+                            <option value="hevc_qsv">Aceleración HW a H.265 (Intel UHD QSV)</option>
                             <option value="libx264">Conversión a H.264 (¡Alto consumo de CPU!)</option>
                             <option value="libx265">Conversión a H.265 (¡Extremo consumo de CPU!)</option>
                         </select>

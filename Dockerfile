@@ -1,12 +1,19 @@
-# Base image build on Debian 11 (Bullseye) to mimic the OnPremise firmware natively
-FROM node:18-bullseye-slim
+# Base image build on Debian 12 (Bookworm) — Race Control Server
+FROM node:20-bookworm-slim
 
-# Install FFMpeg and other required networking utilities for TSST Server
+# Habilitar repositorios non-free para drivers de Intel
+RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources || true
+
+# Install FFMpeg, networking utilities and Intel QSV Hardware Acceleration drivers
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     sqlite3 \
     iproute2 \
     curl \
+    intel-media-va-driver \
+    intel-media-va-driver-non-free \
+    libmfx1 \
+    vainfo \
     && rm -rf /var/lib/apt/lists/*
 
 # Create working directory

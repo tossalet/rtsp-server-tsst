@@ -1,7 +1,7 @@
 {
-  "name": "rtsp-server-tsst",
+  "name": "race-control-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Race Control TssT — Servidor de grabacion y replay para broadcast deportivo",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

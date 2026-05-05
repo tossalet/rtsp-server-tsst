@@ -74,8 +74,11 @@ function startMonitoring() {
                 });
             }
 
+            const cpuTempData = await require('systeminformation').cpuTemperature();
+
             const stats = {
                 cpuLoad: currentCpuLoad.toFixed(1),
+                cpuTemp: cpuTempData && cpuTempData.main ? cpuTempData.main.toFixed(1) : '--',
                 memUsed: (usedMem / (1024*1024*1024)).toFixed(2), // GB
                 memTotal: (totalMem / (1024*1024*1024)).toFixed(2), // GB
                 memPercent: ((usedMem / totalMem) * 100).toFixed(1),
