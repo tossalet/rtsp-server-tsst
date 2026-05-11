@@ -295,11 +295,9 @@
                                 <option value="libx264">H.264 por Software (¡Alto consumo de CPU!)</option>
                                 <option value="libx265">H.265 por Software (¡Extremo consumo de CPU!)</option>
                             </optgroup>
-                            <optgroup label="── Hardware GPU ──">
-                                <option value="h264_qsv">H.264 · Intel QSV (GPU Intel integrada)</option>
-                                <option value="hevc_qsv">H.265 · Intel QSV (GPU Intel integrada)</option>
-                                <option value="h264_nvenc">H.264 · NVIDIA NVENC (GPU NVIDIA)</option>
-                                <option value="hevc_nvenc">H.265 · NVIDIA NVENC (GPU NVIDIA)</option>
+                            <optgroup label="── Hardware GPU (Intel VAAPI) ──">
+                                <option value="h264_vaapi">H.264 · Intel VAAPI (GPU integrada)</option>
+                                <option value="hevc_vaapi">H.265 · Intel VAAPI (GPU integrada)</option>
                             </optgroup>
                         </select>
                         <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">Las opciones GPU usan aceleración de hardware y consumen mínima CPU. Requieren gráfica compatible.</small>
