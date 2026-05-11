@@ -419,10 +419,11 @@ function startOutput(outputObj) {
         // Intel/AMD VAAPI encode.
         // CPU decodes the MPEG-TS → convert to NV12 → hwupload to GPU → GPU encodes.
         // The hwupload filter is MANDATORY: without it VAAPI returns "invalid data found".
-        console.log(`[HW-ACCEL] VAAPI encode: CPU→${vcodec} via /dev/dri/renderD128`);
+        // Intel UHD 630 only supports CQP rate control: use -qp instead of -b:v (VBR not supported).
+        console.log(`[HW-ACCEL] VAAPI encode: CPU→${vcodec} via /dev/dri/renderD128 (CQP mode)`);
         args.push('-vf', 'format=nv12,hwupload');
         args.push('-c:v', vcodec);
-        args.push('-b:v', '4M');
+        args.push('-qp', '23');         // CQP: lower = better quality (23 ≈ visually lossless)
         args.push('-g', '50');          // keyframe interval
         args.push('-c:a', 'copy');
 
