@@ -392,10 +392,10 @@ function startOutput(outputObj) {
 
     const vcodec = outputObj.vcodec || 'copy';
 
-    // Detect hardware codec family to inject correct decoder + encoder params
-    const isQSV = vcodec.endsWith('_qsv');
-    const isNVENC = vcodec.endsWith('_nvenc');
-    const isVAAPI = vcodec.endsWith('_vaapi');
+    // Detect hardware codec family
+    const isQSV   = vcodec.endsWith('_qsv');
+    const isNVENC  = vcodec.endsWith('_nvenc');
+    const isVAAPI  = vcodec.endsWith('_vaapi');
     const isHWCodec = isQSV || isNVENC || isVAAPI;
 
     const args = [
@@ -403,48 +403,39 @@ function startOutput(outputObj) {
         '-y',
     ];
 
-    // --- Hardware Init flags (must go BEFORE -i) ---
-    if (isQSV) {
-        // Init Intel QSV device. Required for both decode and encode.
-        args.push('-init_hw_device', 'qsv=hw');
-        args.push('-filter_hw_device', 'hw');
-        // Use the QSV decoder to keep frames in GPU memory (avoids CPU pixel format mismatch)
-        args.push('-hwaccel', 'qsv');
-        args.push('-hwaccel_output_format', 'qsv');
-        // Pick the QSV decoder that matches the actual source codec detected from the input stream
-        const inputCodec = activeInputs[channel] && activeInputs[channel].codec;
-        let qsvDecoder = null;
-        if (inputCodec === 'H.265' || inputCodec === 'HEVC')      qsvDecoder = 'hevc_qsv';
-        else if (inputCodec === 'H.264' || inputCodec === 'H264') qsvDecoder = 'h264_qsv';
-        if (qsvDecoder) {
-            args.push('-c:v', qsvDecoder);  // Hardware decoder: avoids SW decode → format mismatch
-            console.log(`[HW-ACCEL] QSV input decoder: ${qsvDecoder} (source: ${inputCodec})`);
-        } else {
-            // Unknown codec — let FFmpeg auto-detect; hardware output format still set above
-            console.log(`[HW-ACCEL] QSV: source codec unknown, auto-detecting decoder`);
-        }
-    } else if (isNVENC) {
-        args.push('-hwaccel', 'cuda');
-        args.push('-hwaccel_output_format', 'cuda');
-    }
+    // --- Strategy: CPU decode + GPU encode only ---
+    // Full GPU pipelines (hwaccel_output_format) require frame-perfect pixel format matching
+    // across the muxed TCP stream and consistently fail with MPEG-TS sources.
+    // CPU decode is negligible cost for 4K HEVC; GPU handles only the expensive encode step.
+    // No pre-input hwaccel flags needed — just specify the HW encoder codec after -i.
 
     args.push('-fflags', '+genpts'); // Critical for UDP to MP4 timebase
     args.push('-thread_queue_size', '4096');
     args.push('-i', localTcpIn);
-    
+
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
     } else if (isQSV) {
-        // QSV encoder: use global_quality for constant quality mode (preset ultrafast is SW-only)
+        // QSV encode-only: CPU decodes, Intel GPU encodes H.264/H.265
+        console.log(`[HW-ACCEL] QSV encode-only mode: CPU→${vcodec}`);
         args.push('-c:v', vcodec);
-        args.push('-global_quality', '23');    // QSV quality (lower = better, 23 is visually lossless)
-        args.push('-look_ahead', '0');         // Disable lookahead for low-latency live streaming
+        args.push('-global_quality', '23'); // QSV CQ mode (lower = better, ~23 visually lossless)
+        args.push('-look_ahead', '0');      // Disable for low-latency live
         args.push('-c:a', 'copy');
     } else if (isNVENC) {
+        // NVENC encode-only: CPU decodes, NVIDIA GPU encodes H.264/H.265
+        console.log(`[HW-ACCEL] NVENC encode-only mode: CPU→${vcodec}`);
         args.push('-c:v', vcodec);
-        args.push('-preset', 'p4');           // NVENC preset (p1=fastest, p7=best quality)
+        args.push('-preset', 'p4');  // p1=fastest … p7=best quality
         args.push('-rc', 'vbr');
         args.push('-cq', '23');
+        args.push('-c:a', 'copy');
+    } else if (isVAAPI) {
+        // VAAPI encode-only (Linux/AMD)
+        console.log(`[HW-ACCEL] VAAPI encode-only mode: CPU→${vcodec}`);
+        args.push('-vaapi_device', '/dev/dri/renderD128');
+        args.push('-c:v', vcodec);
+        args.push('-qp', '23');
         args.push('-c:a', 'copy');
     } else {
         // Software encoder (libx264, libx265, etc.)
