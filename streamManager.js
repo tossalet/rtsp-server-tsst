@@ -40,27 +40,41 @@ function startInput(inputObj) {
     }
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpOut = `udp://127.0.0.1:${udpsrv}?pkt_size=1316&buffer_size=8388608`;
+    const localTcpOut = `tcp://127.0.0.1:${udpsrv}`;
 
     // Base args: Read from URL
     const args = [
         '-hide_banner',
         '-y',
-        '-fflags', '+genpts',
-        '-i', url
+        '-fflags', '+genpts'
     ];
 
-    // Main Output: copy codec, output to local MPEG-TS UDP
+    // Editable Buffer para entrada
+    if (inputObj.buffer && inputObj.buffer > 0) {
+        // En UDP/RTSP previene smearing/artifacts ajustando la recolección
+        args.push('-buffer_size', `${inputObj.buffer}M`);
+    }
+
+    // Forzar modo TCP para cámaras de vigilancia RTSP (evita artefactos y cortes rápidos)
+    if (url.startsWith('rtsp://')) {
+        args.push('-rtsp_transport', 'tcp');
+    }
+
+    args.push('-i', url);
+
+    // Main Output: copy codec, output to local MPEG-TS TCP
     args.push('-map', '0:v?');
     args.push('-map', '0:a?');
     args.push('-c:v', 'copy');
-    args.push('-c:a', 'copy');
+    args.push('-c:a', 'aac');
+    args.push('-b:a', '128k');
     if (url.startsWith('rtmp')) {
         args.push('-bsf:v', 'h264_mp4toannexb'); // Force bitstream conversion only for RTMP to avoid corrupting native SRT
     }
     args.push('-f', 'mpegts');
-    args.push('-muxdelay', '0.1'); // Fix TS mux errors with missing audio/video sync
-    args.push(localUdpOut);
+    args.push('-muxdelay', '0.5'); // Dar margen de medio segundo para que FFmpeg ordene y pacifique los paquetes TS
+    args.push('-muxpreload', '0.5');
+    args.push(localTcpOut);
 
     // Visual Preview Generation is now strictly decoupled into its own independent ffmpeg process!
 
@@ -122,56 +136,46 @@ function startInput(inputObj) {
         }
     });
 
-    // Setup UDP Multiplexer in Node.js
-    const router = dgram.createSocket('udp4');
-    const sender = dgram.createSocket('udp4'); // DEDICATED TX SOCKET to prevent ICMP Error poisoning!
+    // Setup TCP Multiplexer in Node.js (Eliminates UDP packet loss on loopback completely)
+    const net = require('net');
+    const router = net.createServer((socket) => {
+        socket.on('data', (data) => {
+            for (const sub of router.subscribers) {
+                // Backpressure protection: Drop slow clients to prevent Node OOM
+                if (sub.writableLength > 4 * 1024 * 1024) {
+                    sub.destroy();
+                    router.subscribers.delete(sub);
+                    console.log(`[ROUTER ${channel}] Killed slow subscriber to prevent memory leak.`);
+                } else {
+                    sub.write(data);
+                }
+            }
+        });
+        socket.on('error', () => {});
+    });
     router.subscribers = new Set();
     
-    // Auto-tune sending buffer for the dedicated TX socket
-    try { sender.setSendBufferSize(8388608); } catch(e){}
-
-    // Recover existing active outputs if this is a restart
-    for (const outId in activeOutputs) {
-        if (activeOutputs[outId].parentChannel === channel) {
-            router.subscribers.add(activeOutputs[outId].localPort);
-            console.log(`[ROUTER] Re-linked orphan output ${outId} (port ${activeOutputs[outId].localPort}) to Input ${channel}`);
-        }
-    }
-    
     // Bind to the udpsrv generated port to receive FFmpeg feed
-    router.bind(udpsrv, '127.0.0.1', () => {
-        try { router.setRecvBufferSize(8388608); } catch(e){} // 8MB buffer to prevent Node UDP packet drop
-        console.log(`[ROUTER] Channel ${channel} bound on UDP ${udpsrv}`);
+    router.listen(udpsrv, '127.0.0.1', () => {
+        console.log(`[ROUTER] Channel ${channel} bound on TCP ${udpsrv}`);
     });
     
-    // Error boundary fatal para ENOBUFS en Raspberry
     router.on('error', (err) => {
-        console.error(`[ROUTER ${channel}] UDP Socket Error (Kernel buffer full?):`, err.message);
+        console.error(`[ROUTER ${channel}] TCP Socket Error:`, err.message);
     });
 
-    // Multiplex payload to all subscribers using the isolated DEDICATED TX SOCKET
-    // Highly optimized using empty fallback callback instead of try/catch to avoid V8 de-optimization
-    const noop = () => {};
-    router.on('message', (msg) => {
-        for (const port of router.subscribers) {
-            sender.send(msg, port, '127.0.0.1', noop);
-        }
-    });
-
-    // Swallow async datagram errors
-    router.on('error', (err) => {});
-    sender.on('error', (err) => {
-        // ICMP Port Unreachable errors land here cleanly, without poisoning the router RX loop!
-    });
-    
     let intentionalStop = false;
     child.markIntentionalStop = () => { intentionalStop = true; };
 
     child.on('close', (code) => {
         console.log(`Input ${channel} exited with code ${code}`);
         // Shutdown router safely
-        try { router.close(); } catch (e) {}
-        try { sender.close(); } catch (e) {}
+        if (router) {
+            for (let sub of router.subscribers) {
+                try { sub.destroy(); } catch(e){}
+            }
+            try { router.close(); } catch (e) {}
+        }
         
         if (telemetryCache[channel]) delete telemetryCache[channel]; // Limpiar RAM historico
         
@@ -183,7 +187,7 @@ function startInput(inputObj) {
 
         // Auto-Restart Logic (If not deliberately stopped by user)
         if (!intentionalStop) {
-            console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in 3s...`);
+            console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in 10s...`);
             // Turn yellow in UI (we fake an active signal with 0 bitrate)
             if (ioInstance) ioInstance.emit('stats', { channel: channel, active: true, bitrate: '0.0kbits/s', time: '--:--:--' });
             
@@ -192,9 +196,21 @@ function startInput(inputObj) {
                 activeInputs[channel].autoRestart = setTimeout(() => {
                     delete activeInputs[channel];
                     startInput(inputObj);
-                }, 3000);
+                    
+                    // Prevent zombie outputs by restarting them after input recovers
+                    setTimeout(() => {
+                        for (const id in activeOutputs) {
+                            if (activeOutputs[id].parentChannel == channel) {
+                                const outObj = activeOutputs[id].outputObj;
+                                stopOutput(id);
+                                setTimeout(() => { startOutput(outObj); }, 1000);
+                            }
+                        }
+                    }, 2000);
+                    
+                }, 10000);
             } else if (!activeInputs[channel]) {
-                setTimeout(() => { startInput(inputObj); }, 3000);
+                setTimeout(() => { startInput(inputObj); }, 10000);
             }
         } else {
             // Intentional stop
@@ -207,7 +223,6 @@ function startInput(inputObj) {
     if (inputObj.preview_enabled !== 0) {
         startPreview(channel, false);
     } else {
-        // Feature UX: Grab a single snapshot frame even if preview is disabled
         startPreview(channel, true);
     }
 
@@ -220,40 +235,61 @@ function startPreview(channel, singleFrame = false) {
 
     const prevPort = 30000 + Math.floor(Math.random() * 30000);
     activeInputs[channel].prevPort = prevPort;
-    activeInputs[channel].router.subscribers.add(prevPort);
 
     const extPath = path.join(__dirname, 'public', 'thumbs', `thumb_${channel}.jpg`);
     const ffmpegCmd = getFFmpegPath();
     const args = [
         '-hide_banner', '-y',
-        // Forzamos a que el demuxer/decoder salte toda la basura rota hasta encontrar un fotograma en la red 100% puro y clave (I-Frame)
         '-skip_frame', 'nokey',
-        '-i', `udp://127.0.0.1:${prevPort}?overrun_nonfatal=1`,
+        '-i', `tcp://127.0.0.1:${prevPort}?listen`,
         '-map', '0:v?'
     ];
 
     if (singleFrame) {
-        // Al pedir exactamente 1 frame sin tocar el framerate, FFmpeg guardará instantáneamente la primera foto válida que descifre.
         args.push('-frames:v', '1', '-q:v', '5', '-update', '1', '-f', 'image2', extPath);
     } else {
-        // Modo continuo: -skip_frame nokey hará que extraiga las fotos al ritmo natural de los Keyframes de la cámara (cada 1 o 2 segs) con coste 0% CPU.
         args.push('-update', '1', '-q:v', '5', '-f', 'image2', extPath);
     }
 
     const child = spawn(ffmpegCmd, args);
     activeInputs[channel].prevProcess = child;
     
+    child.on('error', (err) => {
+        console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
+    });
+
+    // Connect Node to the FFmpeg preview TCP listener
+    setTimeout(() => {
+        if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
+            const net = require('net');
+            const sock = new net.Socket();
+            sock.connect(prevPort, '127.0.0.1', () => {
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.add(sock);
+                }
+            });
+            sock.on('error', () => { 
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.delete(sock); 
+                }
+            });
+            sock.on('close', () => { 
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.delete(sock); 
+                }
+            });
+            activeInputs[channel].prevSocket = sock;
+        }
+    }, 1500);
+
     if (singleFrame) {
-        // Matar proceso después de 15 segundos (tiempo más que de sobra para extraer H265 si el GOP es muy largo)
         setTimeout(() => stopPreview(channel), 15000);
     }
 
     child.on('close', () => {
-        if (activeInputs[channel] && activeInputs[channel].router && activeInputs[channel].prevPort === prevPort) {
-            activeInputs[channel].router.subscribers.delete(prevPort);
-            if (activeInputs[channel].prevProcess === child) {
-                activeInputs[channel].prevProcess = null;
-            }
+        if (activeInputs[channel]) {
+            if (activeInputs[channel].prevSocket) activeInputs[channel].prevSocket.destroy();
+            if (activeInputs[channel].prevProcess === child) activeInputs[channel].prevProcess = null;
         }
     });
 }
@@ -262,7 +298,10 @@ function stopPreview(channel) {
     const inp = activeInputs[channel];
     if (inp && inp.prevProcess) {
         inp.prevProcess.kill('SIGKILL');
-        if (inp.router && inp.prevPort) inp.router.subscribers.delete(inp.prevPort);
+        if (inp.prevSocket) {
+            inp.prevSocket.destroy();
+            if (inp.router) inp.router.subscribers.delete(inp.prevSocket);
+        }
         inp.prevProcess = null;
     }
 }
@@ -281,7 +320,12 @@ function stopInput(channel) {
             }
             activeInputs[channel].process.kill('SIGKILL');
         }
-        try { activeInputs[channel].router.close(); } catch(e){}
+        if (activeInputs[channel].router) {
+            for (let sub of activeInputs[channel].router.subscribers) {
+                try { sub.destroy(); } catch(e){}
+            }
+            try { activeInputs[channel].router.close(); } catch(e){}
+        }
         
         delete activeInputs[channel];
         return true;
@@ -313,7 +357,8 @@ function startOutput(outputObj) {
     let processStarted = false;
 
     const ffmpegCmd = getFFmpegPath();
-    const localUdpIn = `udp://127.0.0.1:${localPort}?pkt_size=1316&buffer_size=8388608&overrun_nonfatal=1`;
+    // Migrado a TCP para evitar el límite de buffer de 64KB de Windows UDP que causaba pérdida de frames en local
+    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
@@ -345,25 +390,76 @@ function startOutput(outputObj) {
 
     const vcodec = outputObj.vcodec || 'copy';
 
+    // Detect hardware codec family to inject correct decoder + encoder params
+    const isQSV = vcodec.endsWith('_qsv');
+    const isNVENC = vcodec.endsWith('_nvenc');
+    const isVAAPI = vcodec.endsWith('_vaapi');
+    const isHWCodec = isQSV || isNVENC || isVAAPI;
+
     const args = [
         '-hide_banner',
         '-y',
-        '-fflags', '+genpts', // Critical for UDP to MP4 timebase
-        '-i', localUdpIn
     ];
+
+    // --- Hardware Init flags (must go BEFORE -i) ---
+    if (isQSV) {
+        // Init Intel QSV device. Required for both decode and encode.
+        args.push('-init_hw_device', 'qsv=hw');
+        args.push('-filter_hw_device', 'hw');
+        // Use the QSV decoder to keep frames in GPU memory (avoids CPU pixel format mismatch)
+        args.push('-hwaccel', 'qsv');
+        args.push('-hwaccel_output_format', 'qsv');
+        // Pick the QSV decoder that matches the actual source codec detected from the input stream
+        const inputCodec = activeInputs[channel] && activeInputs[channel].codec;
+        let qsvDecoder = null;
+        if (inputCodec === 'H.265' || inputCodec === 'HEVC')      qsvDecoder = 'hevc_qsv';
+        else if (inputCodec === 'H.264' || inputCodec === 'H264') qsvDecoder = 'h264_qsv';
+        if (qsvDecoder) {
+            args.push('-c:v', qsvDecoder);  // Hardware decoder: avoids SW decode → format mismatch
+            console.log(`[HW-ACCEL] QSV input decoder: ${qsvDecoder} (source: ${inputCodec})`);
+        } else {
+            // Unknown codec — let FFmpeg auto-detect; hardware output format still set above
+            console.log(`[HW-ACCEL] QSV: source codec unknown, auto-detecting decoder`);
+        }
+    } else if (isNVENC) {
+        args.push('-hwaccel', 'cuda');
+        args.push('-hwaccel_output_format', 'cuda');
+    }
+
+    args.push('-fflags', '+genpts'); // Critical for UDP to MP4 timebase
+    args.push('-thread_queue_size', '4096');
+    args.push('-i', localTcpIn);
     
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
+    } else if (isQSV) {
+        // QSV encoder: use global_quality for constant quality mode (preset ultrafast is SW-only)
+        args.push('-c:v', vcodec);
+        args.push('-global_quality', '23');    // QSV quality (lower = better, 23 is visually lossless)
+        args.push('-look_ahead', '0');         // Disable lookahead for low-latency live streaming
+        args.push('-c:a', 'copy');
+    } else if (isNVENC) {
+        args.push('-c:v', vcodec);
+        args.push('-preset', 'p4');           // NVENC preset (p1=fastest, p7=best quality)
+        args.push('-rc', 'vbr');
+        args.push('-cq', '23');
+        args.push('-c:a', 'copy');
     } else {
+        // Software encoder (libx264, libx265, etc.)
         args.push('-c:v', vcodec);
         args.push('-preset', 'ultrafast');
         args.push('-c:a', 'copy');
     }
     
+    args.push('-max_muxing_queue_size', '9999'); // Prevenir hangs del ffmpeg en la cola de muxing
+    
     // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
     if (format === 'mp4') {
         args.push('-bsf:a', 'aac_adtstoasc');
-        args.push('-max_muxing_queue_size', '1024'); // Prevent FFmpeg hanging on thread queue
+    } else if (format === 'mpegts') {
+        // Aumentar el delay y preload a 500ms para garantizar un pacing (PCR) perfecto hacia vMix sin tirones
+        args.push('-muxdelay', '0.5');
+        args.push('-muxpreload', '0.5');
     }
     
     if (isDisk && format === 'mp4') {
@@ -379,11 +475,28 @@ function startOutput(outputObj) {
     processStarted = true;
     
     // Subscribe this output ONLY IF ffmpeg survives the first 1.5 seconds.
-    // If it dies early (e.g. bad remote RTMP) and we still subscribe, NodeJS floods a dead port causing Kernel ICMP Storms!
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
-            activeInputs[channel].router.subscribers.add(localPort);
-            console.log(`[OUT-${id}] Validated and successfully subscribed to local UDP ${localPort}`);
+            const net = require('net');
+            const sock = new net.Socket();
+            sock.connect(localPort, '127.0.0.1', () => {
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.add(sock);
+                }
+                console.log(`[OUT-${id}] Validated and successfully subscribed to local TCP ${localPort}`);
+            });
+            sock.on('error', () => { 
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.delete(sock); 
+                }
+            });
+            sock.on('close', () => { 
+                if (activeInputs[channel] && activeInputs[channel].router) {
+                    activeInputs[channel].router.subscribers.delete(sock); 
+                }
+            });
+            
+            if (activeOutputs[id]) activeOutputs[id].tcpSocket = sock;
         }
     }, 1500);
 
@@ -429,21 +542,25 @@ function startOutput(outputObj) {
 
     child.on('close', (code) => {
         console.log(`Output ${id} exited with code ${code}`);
-        // Remove subscriber port
-        if (activeInputs[channel] && activeInputs[channel].router) {
-            activeInputs[channel].router.subscribers.delete(localPort);
+        
+        // Remove subscriber socket
+        if (activeOutputs[id] && activeOutputs[id].tcpSocket) {
+            activeOutputs[id].tcpSocket.destroy();
+            if (activeInputs[channel] && activeInputs[channel].router) {
+                activeInputs[channel].router.subscribers.delete(activeOutputs[id].tcpSocket);
+            }
         }
         
         // Auto-Restart Logic
         if (!intentionalStop) {
-            console.log(`[OUT-${id}] Connection lost or crashed. Auto-restarting target...`);
+            console.log(`[OUT-${id}] Connection lost or crashed. Auto-restarting target in 10s...`);
             if (activeOutputs[id] && activeOutputs[id].process === child) {
                 activeOutputs[id].autoRestart = setTimeout(() => {
                     delete activeOutputs[id];
                     startOutput(outputObj);
-                }, 3000);
+                }, 10000);
             } else if (!activeOutputs[id]) {
-                setTimeout(() => { startOutput(outputObj); }, 3000);
+                setTimeout(() => { startOutput(outputObj); }, 10000);
             }
         }
     });
@@ -466,10 +583,13 @@ function stopOutput(id) {
             process.kill('SIGKILL');
         }
         
-        // Unsubscribe from router
-        if (activeInputs[parentChannel] && activeInputs[parentChannel].router) {
-            activeInputs[parentChannel].router.subscribers.delete(localPort);
+        if (activeOutputs[id].tcpSocket) {
+            activeOutputs[id].tcpSocket.destroy();
+            if (activeInputs[parentChannel] && activeInputs[parentChannel].router) {
+                activeInputs[parentChannel].router.subscribers.delete(activeOutputs[id].tcpSocket);
+            }
         }
+        
         delete activeOutputs[id];
         return true;
     }
@@ -522,6 +642,23 @@ setInterval(() => {
     }
 }, 1000);
 
+function getTotalBitrates() {
+    let rx = 0;
+    let tx = 0;
+    for (const channel in activeInputs) {
+        if (telemetryCache[channel] && telemetryCache[channel].length > 0) {
+            rx += telemetryCache[channel][telemetryCache[channel].length - 1].y || 0;
+        }
+    }
+    for (const id in activeOutputs) {
+        const outChan = 'out_' + id;
+        if (telemetryCache[outChan] && telemetryCache[outChan].length > 0) {
+            tx += telemetryCache[outChan][telemetryCache[outChan].length - 1].y || 0;
+        }
+    }
+    return { rx: (rx / 1000).toFixed(2), tx: (tx / 1000).toFixed(2) };
+}
+
 module.exports = {
     setIo,
     startInput,
@@ -530,6 +667,7 @@ module.exports = {
     stopOutput,
     startPreview,
     stopPreview,
+    getTotalBitrates,
     activeInputs,
     activeOutputs
 };
