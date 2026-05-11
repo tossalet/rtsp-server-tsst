@@ -402,36 +402,48 @@ function startOutput(outputObj) {
         '-y',
     ];
 
-    // Strategy: CPU decode + GPU encode only.
-    // No hwaccel flags before -i. The CPU decodes the MPEG-TS (cheap),
-    // the GPU encoder receives raw YUV frames and handles only the encode.
+    // ── VAAPI requires -vaapi_device BEFORE -i as a global option ──
+    // (NVENC/QSV do not need any pre-input flags in CPU-decode + GPU-encode mode)
+    if (isVAAPI) {
+        args.push('-vaapi_device', '/dev/dri/renderD128');
+    }
+
     args.push('-fflags', '+genpts');
     args.push('-thread_queue_size', '4096');
     args.push('-i', localTcpIn);
 
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
-    } else if (isQSV) {
-        // Intel QSV — simplest working params: just codec + bitrate target
-        console.log(`[HW-ACCEL] QSV encode-only: CPU→${vcodec}`);
-        args.push('-c:v', vcodec);
-        args.push('-b:v', '4M');
-        args.push('-c:a', 'copy');
-    } else if (isNVENC) {
-        // NVIDIA NVENC — simplest working params: just codec + bitrate target
-        console.log(`[HW-ACCEL] NVENC encode-only: CPU→${vcodec}`);
-        args.push('-c:v', vcodec);
-        args.push('-b:v', '4M');
-        args.push('-c:a', 'copy');
+
     } else if (isVAAPI) {
-        // AMD/Intel VAAPI (Linux)
-        console.log(`[HW-ACCEL] VAAPI encode-only: CPU→${vcodec}`);
-        args.push('-vaapi_device', '/dev/dri/renderD128');
+        // Intel/AMD VAAPI encode.
+        // CPU decodes the MPEG-TS → convert to NV12 → hwupload to GPU → GPU encodes.
+        // The hwupload filter is MANDATORY: without it VAAPI returns "invalid data found".
+        console.log(`[HW-ACCEL] VAAPI encode: CPU→${vcodec} via /dev/dri/renderD128`);
+        args.push('-vf', 'format=nv12,hwupload');
         args.push('-c:v', vcodec);
         args.push('-b:v', '4M');
+        args.push('-g', '50');          // keyframe interval
         args.push('-c:a', 'copy');
+
+    } else if (isNVENC) {
+        // NVIDIA NVENC encode (CPU decodes, GPU encodes)
+        console.log(`[HW-ACCEL] NVENC encode: CPU→${vcodec}`);
+        args.push('-c:v', vcodec);
+        args.push('-b:v', '4M');
+        args.push('-g', '50');
+        args.push('-c:a', 'copy');
+
+    } else if (isQSV) {
+        // Intel QSV encode (CPU decodes, GPU encodes via libvpl)
+        console.log(`[HW-ACCEL] QSV encode: CPU→${vcodec}`);
+        args.push('-c:v', vcodec);
+        args.push('-b:v', '4M');
+        args.push('-g', '50');
+        args.push('-c:a', 'copy');
+
     } else {
-        // Software encoder (libx264, libx265, etc.)
+        // Software encoder: libx264, libx265, etc.
         args.push('-c:v', vcodec);
         args.push('-preset', 'ultrafast');
         args.push('-c:a', 'copy');
