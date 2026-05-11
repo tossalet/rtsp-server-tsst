@@ -358,7 +358,9 @@ function startOutput(outputObj) {
 
     const ffmpegCmd = getFFmpegPath();
     // Migrado a TCP para evitar el límite de buffer de 64KB de Windows UDP que causaba pérdida de frames en local
-    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen`;
+    // HW codecs (QSV/NVENC) need extra listen time: device init can take >1s before Node connects
+    const tcpListenTimeout = isHWCodec ? 10000000 : 3000000; // microseconds: 10s HW, 3s SW
+    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen&listen_timeout=${tcpListenTimeout}`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
@@ -474,7 +476,9 @@ function startOutput(outputObj) {
     const child = spawn(ffmpegCmd, args);
     processStarted = true;
     
-    // Subscribe this output ONLY IF ffmpeg survives the first 1.5 seconds.
+    // Subscribe this output ONLY IF ffmpeg survives the startup window.
+    // HW codecs need more time to init GPU device before they accept the TCP connection.
+    const subscriberDelay = isHWCodec ? 3000 : 1500;
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
             const net = require('net');
@@ -498,7 +502,7 @@ function startOutput(outputObj) {
             
             if (activeOutputs[id]) activeOutputs[id].tcpSocket = sock;
         }
-    }, 1500);
+    }, subscriberDelay);
 
     child.on('error', (err) => {
         console.error(`[FATAL OUT-${id}] FFmpeg missing or crashed:`, err.message);
