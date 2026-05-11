@@ -393,7 +393,7 @@ function startOutput(outputObj) {
     const vcodec = outputObj.vcodec || 'copy';
 
     // Detect hardware codec family
-    const isQSV   = vcodec.endsWith('_qsv');
+    const isQSV    = vcodec.endsWith('_qsv');
     const isNVENC  = vcodec.endsWith('_nvenc');
     const isVAAPI  = vcodec.endsWith('_vaapi');
     const isHWCodec = isQSV || isNVENC || isVAAPI;
@@ -403,39 +403,33 @@ function startOutput(outputObj) {
         '-y',
     ];
 
-    // --- Strategy: CPU decode + GPU encode only ---
-    // Full GPU pipelines (hwaccel_output_format) require frame-perfect pixel format matching
-    // across the muxed TCP stream and consistently fail with MPEG-TS sources.
-    // CPU decode is negligible cost for 4K HEVC; GPU handles only the expensive encode step.
-    // No pre-input hwaccel flags needed — just specify the HW encoder codec after -i.
-
-    args.push('-fflags', '+genpts'); // Critical for UDP to MP4 timebase
+    // Strategy: CPU decode + GPU encode only.
+    // No hwaccel flags before -i. The CPU decodes the MPEG-TS (cheap),
+    // the GPU encoder receives raw YUV frames and handles only the encode.
+    args.push('-fflags', '+genpts');
     args.push('-thread_queue_size', '4096');
     args.push('-i', localTcpIn);
 
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
     } else if (isQSV) {
-        // QSV encode-only: CPU decodes, Intel GPU encodes H.264/H.265
-        console.log(`[HW-ACCEL] QSV encode-only mode: CPU→${vcodec}`);
+        // Intel QSV — simplest working params: just codec + bitrate target
+        console.log(`[HW-ACCEL] QSV encode-only: CPU→${vcodec}`);
         args.push('-c:v', vcodec);
-        args.push('-global_quality', '23'); // QSV CQ mode (lower = better, ~23 visually lossless)
-        args.push('-look_ahead', '0');      // Disable for low-latency live
+        args.push('-b:v', '4M');
         args.push('-c:a', 'copy');
     } else if (isNVENC) {
-        // NVENC encode-only: CPU decodes, NVIDIA GPU encodes H.264/H.265
-        console.log(`[HW-ACCEL] NVENC encode-only mode: CPU→${vcodec}`);
+        // NVIDIA NVENC — simplest working params: just codec + bitrate target
+        console.log(`[HW-ACCEL] NVENC encode-only: CPU→${vcodec}`);
         args.push('-c:v', vcodec);
-        args.push('-preset', 'p4');  // p1=fastest … p7=best quality
-        args.push('-rc', 'vbr');
-        args.push('-cq', '23');
+        args.push('-b:v', '4M');
         args.push('-c:a', 'copy');
     } else if (isVAAPI) {
-        // VAAPI encode-only (Linux/AMD)
-        console.log(`[HW-ACCEL] VAAPI encode-only mode: CPU→${vcodec}`);
+        // AMD/Intel VAAPI (Linux)
+        console.log(`[HW-ACCEL] VAAPI encode-only: CPU→${vcodec}`);
         args.push('-vaapi_device', '/dev/dri/renderD128');
         args.push('-c:v', vcodec);
-        args.push('-qp', '23');
+        args.push('-b:v', '4M');
         args.push('-c:a', 'copy');
     } else {
         // Software encoder (libx264, libx265, etc.)
@@ -443,22 +437,20 @@ function startOutput(outputObj) {
         args.push('-preset', 'ultrafast');
         args.push('-c:a', 'copy');
     }
-    
-    args.push('-max_muxing_queue_size', '9999'); // Prevenir hangs del ffmpeg en la cola de muxing
-    
-    // Critical bitstream filter for AAC audio inside MP4 container from raw UDP streams
+
+    args.push('-max_muxing_queue_size', '9999');
+
     if (format === 'mp4') {
         args.push('-bsf:a', 'aac_adtstoasc');
     } else if (format === 'mpegts') {
-        // Aumentar el delay y preload a 500ms para garantizar un pacing (PCR) perfecto hacia vMix sin tirones
         args.push('-muxdelay', '0.5');
         args.push('-muxpreload', '0.5');
     }
-    
+
     if (isDisk && format === 'mp4') {
-        args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof'); // MP4 fragmentado rocoso
+        args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof');
     }
-    
+
     args.push('-f', format);
     args.push(destUrl);
 
@@ -466,10 +458,9 @@ function startOutput(outputObj) {
 
     const child = spawn(ffmpegCmd, args);
     processStarted = true;
-    
-    // Subscribe this output ONLY IF ffmpeg survives the startup window.
-    // HW codecs need more time to init GPU device before they accept the TCP connection.
-    const subscriberDelay = isHWCodec ? 3000 : 1500;
+
+    // Subscriber delay: HW codecs need a moment for FFmpeg to open the TCP listener
+    const subscriberDelay = isHWCodec ? 2500 : 1500;
     setTimeout(() => {
         if (child.exitCode === null && activeInputs[channel] && activeInputs[channel].router) {
             const net = require('net');
@@ -478,50 +469,67 @@ function startOutput(outputObj) {
                 if (activeInputs[channel] && activeInputs[channel].router) {
                     activeInputs[channel].router.subscribers.add(sock);
                 }
-                console.log(`[OUT-${id}] Validated and successfully subscribed to local TCP ${localPort}`);
+                console.log(`[OUT-${id}] Subscribed to TCP ${localPort} → ${vcodec}`);
             });
-            sock.on('error', () => { 
+            sock.on('error', () => {
                 if (activeInputs[channel] && activeInputs[channel].router) {
-                    activeInputs[channel].router.subscribers.delete(sock); 
+                    activeInputs[channel].router.subscribers.delete(sock);
                 }
             });
-            sock.on('close', () => { 
+            sock.on('close', () => {
                 if (activeInputs[channel] && activeInputs[channel].router) {
-                    activeInputs[channel].router.subscribers.delete(sock); 
+                    activeInputs[channel].router.subscribers.delete(sock);
                 }
             });
-            
             if (activeOutputs[id]) activeOutputs[id].tcpSocket = sock;
+        } else if (child.exitCode !== null) {
+            console.error(`[OUT-${id}] FFmpeg died before subscriber connected (exit=${child.exitCode}). See [HW-STDERR] lines above.`);
         }
     }, subscriberDelay);
 
     child.on('error', (err) => {
-        console.error(`[FATAL OUT-${id}] FFmpeg missing or crashed:`, err.message);
+        console.error(`[FATAL OUT-${id}] FFmpeg spawn error:`, err.message);
     });
 
-    // Suppress heavy console logs but quietly parse bitrate metrics for UI telemetry without blocking V8
-    let lastParseTime = 0;
-    
+    // --- Stderr handler ---
+    // HW codecs: log ALL output lines (no throttle) for the first 20 seconds.
+    //            This makes FFmpeg errors visible in the Node console.
+    // SW codecs: only parse stats for UI telemetry (saves log spam).
+    const hwStartTime = Date.now();
+    let lastParseTime  = 0;
+
     child.stderr.on('data', (data) => {
         const now = Date.now();
+        const out  = data.toString();
+
+        if (isHWCodec && (now - hwStartTime) < 20000) {
+            // Print every non-progress line so errors are never hidden
+            out.split('\n').forEach(line => {
+                const l = line.trim();
+                if (l && !l.startsWith('frame=') && !l.startsWith('fps=') && !l.startsWith('size=')) {
+                    console.log(`[OUT-${id}][HW] ${l}`);
+                }
+            });
+        }
+
+        // Throttled stats for UI
         if (now - lastParseTime < 500) return;
         lastParseTime = now;
-        
-        const out = data.toString();
+
         const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
-        const timeMatch = out.match(/time=([\d:.]+)/);
-        
+        const timeMatch    = out.match(/time=([\d:.]+)/);
+
         if (bitrateMatch && ioInstance) {
             const outChan = 'out_' + id;
             if (activeOutputs[id]) activeOutputs[id].lastUpdate = now;
-            
+
             if (!telemetryCache[outChan]) telemetryCache[outChan] = [];
             const brText = bitrateMatch[1];
-            const br = parseFloat(brText); // ej. "4500.5kbits/s" -> 4500.5
-            
+            const br = parseFloat(brText);
+
             telemetryCache[outChan].push({ t: new Date().toLocaleTimeString(), y: br || 0 });
             if (telemetryCache[outChan].length > 60) telemetryCache[outChan].shift();
-            
+
             ioInstance.emit('stats', {
                 channel: outChan,
                 bitrate: brText,
