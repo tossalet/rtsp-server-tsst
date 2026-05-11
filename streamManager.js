@@ -357,28 +357,24 @@ function startOutput(outputObj) {
     let processStarted = false;
 
     const ffmpegCmd = getFFmpegPath();
-    // Migrado a TCP para evitar el límite de buffer de 64KB de Windows UDP que causaba pérdida de frames en local
-    // HW codecs (QSV/NVENC) need extra listen time: device init can take >1s before Node connects
-    const tcpListenTimeout = isHWCodec ? 10000000 : 3000000; // microseconds: 10s HW, 3s SW
-    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen&listen_timeout=${tcpListenTimeout}`;
 
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
     let format = 'mpegts';
     let destUrl = url;
-    
+
     if (isRtmp) format = 'flv';
     if (isDisk) {
         destUrl = url.replace('disk://', '');
-        
+
         // AUTO-TIMESTAMP TO PREVENT OVERWRITES:
         // Inject current datetime into filename: NombreInput_20260418_223500.mp4
         const now = new Date();
         const df = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
-        
+
         const lastSlash = Math.max(destUrl.lastIndexOf('/'), destUrl.lastIndexOf('\\'));
         const lastDot = destUrl.lastIndexOf('.');
-        
+
         if (lastDot > lastSlash) {
             destUrl = destUrl.substring(0, lastDot) + '_' + df + destUrl.substring(lastDot);
         } else {
@@ -390,13 +386,16 @@ function startOutput(outputObj) {
         else format = 'mp4';
     }
 
-    const vcodec = outputObj.vcodec || 'copy';
-
-    // Detect hardware codec family
-    const isQSV    = vcodec.endsWith('_qsv');
-    const isNVENC  = vcodec.endsWith('_nvenc');
-    const isVAAPI  = vcodec.endsWith('_vaapi');
+    // ── Codec detection (must happen BEFORE localTcpIn so isHWCodec is defined) ──
+    const vcodec    = outputObj.vcodec || 'copy';
+    const isQSV     = vcodec.endsWith('_qsv');
+    const isNVENC   = vcodec.endsWith('_nvenc');
+    const isVAAPI   = vcodec.endsWith('_vaapi');
     const isHWCodec = isQSV || isNVENC || isVAAPI;
+
+    // HW codecs need a longer TCP listen window — GPU init takes time before FFmpeg accepts the connection
+    const tcpListenTimeout = isHWCodec ? 10000000 : 3000000; // microseconds: 10s HW, 3s SW
+    const localTcpIn = `tcp://127.0.0.1:${localPort}?listen&listen_timeout=${tcpListenTimeout}`;
 
     const args = [
         '-hide_banner',
