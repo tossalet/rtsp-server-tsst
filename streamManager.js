@@ -311,26 +311,33 @@ function startOutput(outputObj) {
         else format = 'mp4';
     }
 
-    const vcodec = outputObj.vcodec || 'copy';
+    const vcodec    = outputObj.vcodec || 'copy';
+    const isQSV     = vcodec.endsWith('_qsv');
+    const isNVENC   = vcodec.endsWith('_nvenc');
+    const isVAAPI   = vcodec.endsWith('_vaapi');
+    const isHWCodec = isQSV || isNVENC || isVAAPI;
 
-    const args = [
-        '-hide_banner',
-        '-y',
-        '-fflags', '+genpts',
-        '-thread_queue_size', '4096',
-        '-f', 'mpegts', '-i', 'pipe:0'
-    ];
+    const args = ['-hide_banner', '-y'];
+
+    // VAAPI requires -vaapi_device BEFORE -i as a global option
+    if (isVAAPI) args.push('-vaapi_device', '/dev/dri/renderD128');
+
+    args.push('-fflags', '+genpts', '-thread_queue_size', '4096', '-f', 'mpegts', '-i', 'pipe:0');
 
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
-    } else if (vcodec === 'h264_qsv' || vcodec === 'hevc_qsv') {
-        // Hardware Acceleration Intel UHD 630
-        args.push('-c:v', vcodec);
-        args.push('-preset', 'veryfast');
-        args.push('-global_quality', '23'); // Alternativa a CRF para Intel QSV
-        args.push('-look_ahead', '0'); // Baja latencia
-        args.push('-g', '25'); // Keyframe cada 25 frames
+    } else if (isVAAPI) {
+        // Intel VAAPI: CPU decodes → NV12 → hwupload to GPU → GPU encodes.
+        // hwupload is MANDATORY. Intel UHD 630 only supports CQP: -qp instead of -b:v.
+        console.log(`[HW-ACCEL] VAAPI encode: CPU→${vcodec} via /dev/dri/renderD128 (CQP mode)`);
+        args.push('-vf', 'format=nv12,hwupload');
+        args.push('-c:v', vcodec, '-qp', '23', '-g', '50');
         args.push('-c:a', 'copy'); // el audio ya es AAC desde el input
+    } else if (isNVENC || isQSV) {
+        // NVIDIA NVENC / Intel QSV (CPU decodes, GPU encodes)
+        console.log(`[HW-ACCEL] ${isNVENC ? 'NVENC' : 'QSV'} encode: CPU→${vcodec}`);
+        args.push('-c:v', vcodec, '-b:v', '4M', '-g', '50');
+        args.push('-c:a', 'copy');
     } else {
         args.push('-c:v', vcodec);
         args.push('-preset', 'ultrafast');
@@ -373,16 +380,28 @@ function startOutput(outputObj) {
         console.error(`[FATAL OUT-${id}] FFmpeg missing or crashed:`, err.message);
     });
 
-    // Parse bitrate metrics for UI telemetry, throttled to 2/s
+    // HW codecs: log every non-progress line for the first 20s so GPU errors are visible.
+    // Then (and for SW codecs) only parse bitrate metrics for UI telemetry, throttled to 2/s
+    const hwStartTime = Date.now();
     let lastParseTime = 0;
     const outChan = 'out_' + id;
 
     child.stderr.on('data', (data) => {
         const now = Date.now();
+        const out = data.toString();
+
+        if (isHWCodec && (now - hwStartTime) < 20000) {
+            out.split('\n').forEach(line => {
+                const l = line.trim();
+                if (l && !l.startsWith('frame=') && !l.startsWith('fps=') && !l.startsWith('size=')) {
+                    console.log(`[OUT-${id}][HW] ${l}`);
+                }
+            });
+        }
+
         if (now - lastParseTime < 500) return;
         lastParseTime = now;
 
-        const out = data.toString();
         const bitrateMatch = out.match(/bitrate=\s*([\d.]+kbits\/s)/);
         const timeMatch = out.match(/time=([\d:.]+)/);
 
