@@ -266,12 +266,39 @@ function toggleAnalyticsChannel(channelId) {
     updateTelemetryChart();
 }
 
+function appendLogToViewer(logEntry) {
+    const viewer = document.getElementById('log-viewer');
+    if (!viewer) return;
+    
+    if (viewer.innerHTML.includes('Waiting for logs...')) viewer.innerHTML = '';
+    
+    const color = logEntry.level === 'ERROR' ? '#ef4444' : '#34d399';
+    const entryDiv = document.createElement('div');
+    entryDiv.style.marginBottom = '4px';
+    
+    // Escapar tags HTML del mensaje por seguridad y formatear
+    const safeMsg = logEntry.message ? logEntry.message.replace(/</g, "&lt;").replace(/>/g, "&gt;") : '';
+    entryDiv.innerHTML = `<span style="color:#6b7280;">[${logEntry.timestamp}]</span> <span style="color:${color}; font-weight:bold;">[${logEntry.level}]</span> <span style="word-break: break-all;">${safeMsg}</span>`;
+    
+    viewer.appendChild(entryDiv);
+    // Auto-scroll si está abajo del todo
+    viewer.scrollTop = viewer.scrollHeight;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     switchTab('system'); // Iniciar en el Dashboard
     fetchData();
     initChart();
+    
+    fetch('/api/logs').then(r => r.json()).then(logs => {
+        logs.forEach(l => appendLogToViewer(l));
+    }).catch(e => console.error("Error loading logs", e));
 
     // Socket listeners
+    socket.on('server_log', (logEntry) => {
+        appendLogToViewer(logEntry);
+    });
+
     socket.on('db_update', (data) => {
         console.log("DB Update:", data.event);
         
@@ -388,6 +415,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const isPreviewLive = imgElem.classList.contains('preview-active');
             
             if (bitVal > 0) {
+                // Cancelar cualquier cuenta atrás de pérdida de señal
+                if (imgElem.dataset.offlineTimeout) {
+                    clearTimeout(parseInt(imgElem.dataset.offlineTimeout));
+                    delete imgElem.dataset.offlineTimeout;
+                }
+
                 // Hay señal
                 if (!imgElem.classList.contains('has-signal')) {
                     imgElem.classList.add('has-signal');
@@ -398,22 +431,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
                 
-                if (isPreviewLive) {
-                    // Update live
-                    imgElem.src = `/thumbs/thumb_${data.channel}.jpg?t=${Date.now()}`;
-                } else if (!imgElem.src.includes('thumb_')) {
+                // La preview en vivo la refresca el intervalo de 4s (la miniatura solo cambia en keyframes);
+                // recargarla aquí suponía 2 descargas JPG por segundo y cámara
+                if (!isPreviewLive && !imgElem.src.includes('thumb_')) {
                     // Restaurar foto estática single-frame a prueba de fallos y sin parpadeos
                     const temp = new Image();
                     temp.onload = () => { imgElem.src = temp.src; };
                     temp.src = `/thumbs/thumb_${data.channel}.jpg?t=${Math.floor(Date.now()/5000)}`;
                 }
             } else {
-                // No hay señal real
-                if (imgElem.classList.contains('has-signal')) imgElem.classList.remove('has-signal');
-                // Nos aseguramos de mantener las barras
-                if (!imgElem.src.includes('bars.svg')) {
-                    imgElem.src = '/images/bars.svg';
-                    imgElem.style.filter = 'none';
+                // No hay señal real (iniciar debounce para no parpadear)
+                if (!imgElem.dataset.offlineTimeout) {
+                    imgElem.dataset.offlineTimeout = setTimeout(() => {
+                        if (imgElem.classList.contains('has-signal')) imgElem.classList.remove('has-signal');
+                        // Nos aseguramos de mantener las barras
+                        if (!imgElem.src.includes('bars.svg')) {
+                            imgElem.src = '/images/bars.svg';
+                            imgElem.style.filter = 'none';
+                        }
+                        delete imgElem.dataset.offlineTimeout;
+                    }, 5000).toString();
                 }
             }
         }
@@ -442,6 +479,20 @@ document.addEventListener('DOMContentLoaded', () => {
             cpuLabel.innerText = stats.cpuLoad;
             cpuBar.style.width = stats.cpuLoad + '%';
             cpuBar.style.background = stats.cpuLoad > 85 ? 'var(--color-red)' : 'var(--accent-blue)';
+        }
+        
+        // Temperature
+        const tempEl = document.getElementById('sys_temp');
+        if (tempEl) {
+            tempEl.innerText = stats.cpuTemp !== undefined && stats.cpuTemp !== '--' ? stats.cpuTemp + ' °C' : '-- °C';
+            if (stats.cpuTemp !== undefined && stats.cpuTemp !== '--') {
+                const t = parseFloat(stats.cpuTemp);
+                if (t >= 80) tempEl.style.color = 'var(--color-red)';
+                else if (t >= 70) tempEl.style.color = 'var(--color-yellow)';
+                else tempEl.style.color = 'var(--color-green)';
+            } else {
+                tempEl.style.color = 'inherit';
+            }
         }
         
         // RAM
@@ -529,7 +580,7 @@ function renderStreams() {
 
         const inputHTML = `
             <div class="stream-card ${isExpandedClass}" id="input-card-${input.channel}">
-                <div class="stream-header">
+                <div class="stream-header" style="cursor: pointer;" onclick="if(event.target.closest('.control-actions') || event.target.closest('button') || event.target.tagName === 'BUTTON') return; toggleExpand(${input.channel})">
                     <div class="left-section">
                         <button class="btn-expand" onclick="toggleExpand(${input.channel})"><i class="fa-solid fa-chevron-down"></i></button>
                         <div id="led-${input.channel}" class="connection-led ${input.enabled ? 'active yellow' : 'error'} tooltip">
@@ -569,13 +620,13 @@ function renderStreams() {
                 
                 <div class="stream-outputs" id="outputs-container-${input.channel}">
                     <div class="thumb-container" style="padding: 1rem 1.5rem; background: rgba(0,0,0,0.3); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 20px; align-items: center;">
-                        <div style="position:relative; width:160px; height:90px; border-radius:6px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                        <div style="position:relative; width:160px; height:90px; flex-shrink:0; border-radius:6px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
                             <img id="thumb-img-${input.channel}" class="${input.preview_enabled && input.enabled ? 'preview-active' : ''}" data-src="/thumbs/thumb_${input.channel}.jpg" src="${input.enabled ? '/thumbs/thumb_' + input.channel + '.jpg' + (input.preview_enabled ? '?t=' + Date.now() : '') : '/images/bars.svg'}" onerror="if(!this.src.includes('bars.svg')){this.src='/images/bars.svg';}" style="width:100%; height:100%; object-fit:cover; filter: ${input.preview_enabled && input.enabled ? 'none' : 'grayscale(100%) opacity(40%) blur(1px)'}; transition: filter 0.3s;" />
                             <button onclick="togglePreview(${input.channel})" class="action-btn" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.6); padding:8px 12px; border:none; color:${input.preview_enabled ? 'var(--color-green)' : '#fff'}; border-radius:4px; font-size:1.2rem; cursor:pointer; opacity: 0.8; transition:0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.8" title="${input.preview_enabled ? 'Desactivar Previsualización (Ahorro CPU)' : 'Activar Previsualización'}">
                                 <i class="fa-solid ${input.preview_enabled ? 'fa-eye' : 'fa-eye-slash'}"></i>
                             </button>
                         </div>
-                        <div style="font-size:0.85rem; color:var(--text-muted); line-height: 1.4; display:flex; flex-direction:column; gap:5px;">
+                        <div style="font-size:0.85rem; color:var(--text-muted); line-height: 1.4; display:flex; flex-direction:column; gap:5px; min-width:0;">
                             <p><strong>URL Origen:</strong></p>
                             <span style="color:#fff; font-weight:600; font-family:monospace; word-break: break-all;">${input.url}</span>
                         </div>
@@ -733,6 +784,8 @@ function openEditInput(channel) {
     
     document.getElementById('inp_name').value = input.name;
     document.getElementById('inp_ip').value = input.url;
+    const bufEl = document.getElementById('inp_buffer');
+    if(bufEl) bufEl.value = input.buffer || 0;
     
     updateInputFields();
     
@@ -915,7 +968,8 @@ async function submitInput(e) {
 
     const data = {
         name: document.getElementById('inp_name').value,
-        url: outUrl
+        url: outUrl,
+        buffer: parseInt(document.getElementById('inp_buffer').value) || 0
     };
     
     const isEdit = document.getElementById('inp_is_edit').value === 'true';
@@ -962,7 +1016,8 @@ async function submitOutput(e) {
         const mode = document.getElementById('out_mode').value;
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
         if(!port) { alert('El puerto es obligatorio'); return; }
-        outUrl = `srt://${ip}:${port}?mode=${mode}`;
+        // Se añade pkt_size=1316 (estándar MTU para MPEG-TS) y latency=200000 (200ms) para absorber micro-jitter de red y CPU
+        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=200000`;
     } else {
         const ip = document.getElementById('out_ip').value || '127.0.0.1';
         if(!port) { alert('El puerto es obligatorio'); return; }

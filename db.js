@@ -1,14 +1,15 @@
-const sqlite3 = require('sqlite3').verbose();
+const sqlite3 = require('sqlite3');
 const path = require('path');
-
 const fs = require('fs');
 
+const isProd = process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV;
 const dbDir = path.join(__dirname, 'data');
-if (process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV) {
-    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-}
+if (isProd && !fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
-const dbPath = process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV ? path.join(dbDir, 'onpremise.db') : path.resolve(__dirname, 'onpremise.db');
+const dbPath = isProd ? path.join(dbDir, 'race-control.db') : path.resolve(__dirname, 'race-control.db');
+
+let resolveReady;
+const ready = new Promise(r => { resolveReady = r; });
 
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
@@ -33,11 +34,9 @@ function initDB() {
             wtdgsecs INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             udpsrv INTEGER NOT NULL DEFAULT 0,
-            preview_enabled INTEGER NOT NULL DEFAULT 1
+            preview_enabled INTEGER NOT NULL DEFAULT 1,
+            buffer INTEGER NOT NULL DEFAULT 0
         )`);
-
-        // Migration for inputs
-        db.run("ALTER TABLE inputs ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 1", () => {});
 
         // Table outputs
         db.run(`CREATE TABLE IF NOT EXISTS outputs (
@@ -49,11 +48,9 @@ function initDB() {
             enabled INTEGER NOT NULL DEFAULT 1,
             udpsrv INTEGER NOT NULL DEFAULT 0,
             vcodec TEXT NOT NULL DEFAULT 'copy',
+            was_enabled INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (channel) REFERENCES inputs (channel)
         )`);
-
-        // Migration for existing databases
-        db.run("ALTER TABLE outputs ADD COLUMN vcodec TEXT NOT NULL DEFAULT 'copy'", () => {});
 
         // Table ports
         db.run(`CREATE TABLE IF NOT EXISTS ports (
@@ -64,9 +61,6 @@ function initDB() {
             rtmpPort INTEGER NOT NULL DEFAULT 1935
         )`);
 
-        // Migration for ports
-        db.run("ALTER TABLE ports ADD COLUMN rtmpPort INTEGER NOT NULL DEFAULT 1935", () => {});
-
         // Table users
         db.run(`CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -75,14 +69,28 @@ function initDB() {
             email TEXT NOT NULL DEFAULT ''
         )`);
 
-        // Insert initial configuration defaults if empty
+        // Migraciones para BDs antiguas. Van DESPUÉS de los CREATE: antes el ALTER de outputs se
+        // ejecutaba sin existir la tabla y en una instalación nueva faltaba was_enabled.
+        db.run("ALTER TABLE inputs ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 1", () => {});
+        db.run("ALTER TABLE inputs ADD COLUMN buffer INTEGER NOT NULL DEFAULT 0", () => {});
+        db.run("ALTER TABLE outputs ADD COLUMN vcodec TEXT NOT NULL DEFAULT 'copy'", () => {});
+        db.run("ALTER TABLE outputs ADD COLUMN was_enabled INTEGER NOT NULL DEFAULT 0", () => {});
+        db.run("ALTER TABLE ports ADD COLUMN rtmpPort INTEGER NOT NULL DEFAULT 1935", () => {});
+
+        // Insert initial configuration defaults if empty (cada tabla por separado)
         db.get('SELECT COUNT(*) AS count FROM users', (err, row) => {
             if (row && row.count === 0) {
                 db.run(`INSERT INTO users (username, password, role) VALUES ('admin', 'admin', 4), ('user', 'user', 16)`);
+            }
+        });
+        db.get('SELECT COUNT(*) AS count FROM ports', (err, row) => {
+            if (row && row.count === 0) {
                 db.run(`INSERT INTO ports (chanMin, chanMax, udpMin, udpMax) VALUES (1, 20000, 1024, 49151)`);
             }
+            resolveReady(); // serialize(): todas las sentencias anteriores ya se han ejecutado
         });
     });
 }
 
+db.ready = ready;
 module.exports = db;

@@ -1,7 +1,44 @@
+const os = require('os');
 const si = require('systeminformation');
 const db = require('./db');
+const streamManager = require('./streamManager');
 
 let ioInstance = null;
+let lastCpu = os.cpus();
+let smoothedCpu = 0;
+let dbCache = { streamsTotal: 0, streamsActive: 0, streamsError: 0 };
+let lastDbPoll = 0;
+let cpuTempCache = '--';
+let lastTempPoll = 0;
+
+function getCpuLoad() {
+    const cpus = os.cpus();
+    let idleDiff = 0;
+    let totalDiff = 0;
+
+    for (let i = 0; i < cpus.length; i++) {
+        const cpu = cpus[i];
+        const last = lastCpu[i] || cpu;
+
+        let total = 0, lastTotal = 0;
+        for (const type in cpu.times) total += cpu.times[type];
+        for (const type in last.times) lastTotal += last.times[type];
+
+        idleDiff += (cpu.times.idle - last.times.idle);
+        totalDiff += (total - lastTotal);
+    }
+
+    lastCpu = cpus;
+    if (totalDiff === 0) return smoothedCpu;
+
+    const rawCpu = 100 - ((idleDiff / totalDiff) * 100);
+
+    // Exponential Moving Average (EMA) para suavizar la lectura y ocultar los micropicos de FFmpeg (20% current, 80% history)
+    if (smoothedCpu === 0) smoothedCpu = rawCpu;
+    else smoothedCpu = (rawCpu * 0.2) + (smoothedCpu * 0.8);
+
+    return smoothedCpu;
+}
 
 function setIo(io) {
     ioInstance = io;
@@ -13,49 +50,42 @@ function startMonitoring() {
         if (!ioInstance) return;
 
         try {
-            const [cpu, mem, net] = await Promise.all([
-                si.currentLoad(),
-                si.mem(),
-                si.networkStats() // Auto-detect interfaces instead of 'default' string
-            ]);
+            const currentCpuLoad = getCpuLoad();
+            const totalMem = os.totalmem();
+            const freeMem = os.freemem();
+            const usedMem = totalMem - freeMem;
 
-            let txSeq = 0, rxSeq = 0;
-            if (net && net.length > 0) {
-                net.forEach(iface => {
-                    if (iface.operstate === 'up' && iface.iface !== 'lo') {
-                        txSeq += iface.tx_sec || 0;
-                        rxSeq += iface.rx_sec || 0;
-                    }
+            const netStats = streamManager.getTotalBitrates();
+
+            const now = Date.now();
+            if (now - lastDbPoll > 10000) {
+                lastDbPoll = now;
+                // Count streams logically from DB
+                db.all('SELECT enabled FROM inputs UNION ALL SELECT enabled FROM outputs', [], (err, rows) => {
+                    if (!rows) return;
+                    const streamsActive = rows.filter(r => r.enabled).length;
+                    dbCache = { streamsTotal: rows.length, streamsActive, streamsError: rows.length - streamsActive };
                 });
             }
 
-            // Count streams logically from DB
-            db.all('SELECT enabled FROM inputs', [], (err, inps) => {
-                db.all('SELECT enabled FROM outputs', [], (err, outs) => {
-                    let streamsTotal = 0, streamsActive = 0, streamsError = 0;
-                    if(inps) {
-                        streamsTotal += inps.length;
-                        inps.forEach(i => i.enabled ? streamsActive++ : streamsError++);
-                    }
-                    if(outs) {
-                        streamsTotal += outs.length;
-                        outs.forEach(i => i.enabled ? streamsActive++ : streamsError++);
-                    }
+            // La temperatura cambia despacio; en Windows cada lectura lanza un proceso externo
+            if (now - lastTempPoll > 10000) {
+                lastTempPoll = now;
+                const cpuTempData = await si.cpuTemperature();
+                cpuTempCache = cpuTempData && cpuTempData.main ? cpuTempData.main.toFixed(1) : '--';
+            }
 
-                    const stats = {
-                        cpuLoad: cpu.currentLoad.toFixed(1),
-                        memUsed: (mem.active / (1024*1024*1024)).toFixed(2), // GB
-                        memTotal: (mem.total / (1024*1024*1024)).toFixed(2), // GB
-                        memPercent: ((mem.active / mem.total) * 100).toFixed(1),
-                        netTx: ((txSeq * 8) / (1024*1024)).toFixed(2), // Mbps
-                        netRx: ((rxSeq * 8) / (1024*1024)).toFixed(2), // Mbps
-                        streamsTotal,
-                        streamsActive,
-                        streamsError
-                    };
-
-                    ioInstance.emit('sys_stats', stats);
-                });
+            ioInstance.emit('sys_stats', {
+                cpuLoad: currentCpuLoad.toFixed(1),
+                cpuTemp: cpuTempCache,
+                memUsed: (usedMem / (1024*1024*1024)).toFixed(2), // GB
+                memTotal: (totalMem / (1024*1024*1024)).toFixed(2), // GB
+                memPercent: ((usedMem / totalMem) * 100).toFixed(1),
+                netTx: netStats.tx, // Mbps
+                netRx: netStats.rx, // Mbps
+                streamsTotal: dbCache.streamsTotal,
+                streamsActive: dbCache.streamsActive,
+                streamsError: dbCache.streamsError
             });
         } catch (e) {
             console.error("System Polling Error", e);
@@ -63,7 +93,7 @@ function startMonitoring() {
 
         setTimeout(loop, 2500);
     }
-    
+
     loop(); // init
 }
 

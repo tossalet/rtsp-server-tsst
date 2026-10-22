@@ -1,102 +1,121 @@
 #!/bin/bash
 
-# Comprobar root
+# ============================================================
+#   INSTALADOR DIRECTO — RACE CONTROL SERVER (SIN DOCKER)
+#   HP EliteDesk 800 G5 · Intel i7-9700 · UHD 630
+#   Debian 12 (Bookworm)
+# ============================================================
+
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ Error: Por favor, ejecuta este instalador con permisos de administrador."
-  echo "👉 Usa el comando: sudo bash instalar_servidor.sh"
-  exit
+  echo "❌ Ejecuta este script como root: sudo bash instalar_servidor.sh"
+  exit 1
 fi
 
-# Instalar whiptail por si no está (librería para dibujar menús visuales en la consola)
-apt-get update -qq
-apt-get install -y whiptail
-
-# Bienvenida
-whiptail --title "Instalador Servidor SRT TSST" --msgbox "Bienvenido al asistente de instalación del Servidor SRT para Raspberry Pi.\n\nA continuación, configuraremos los parámetros básicos de tu servidor, instalaremos Node.js, FFmpeg y lo dejaremos listo para funcionar." 14 65
-
-# Preguntar Puerto Web
-WEB_PORT=$(whiptail --title "Configuración" --inputbox "Introduce el PUERTO en el que deseas visualizar el Panel de Control Web:\n\n(Ejemplo: 3000, 80, 8080)" 12 60 "3000" 3>&1 1>&2 2>&3)
-if [ -z "$WEB_PORT" ]; then WEB_PORT=3000; fi
-
-# Preguntar Puerto SRT
-SRT_PORT=$(whiptail --title "Configuración" --inputbox "Introduce el PUERTO BASE para la recepción de señal SRT:\n\n(Ejemplo: 8000)" 12 60 "8000" 3>&1 1>&2 2>&3)
-if [ -z "$SRT_PORT" ]; then SRT_PORT=8000; fi
-
-# Confirmación Final
-whiptail --title "Resumen de Instalación" --yesno "Se procederá a instalar con la siguiente configuración:\n\n- Panel Web: Puerto $WEB_PORT\n- Señal SRT: Puerto Base $SRT_PORT\n\n¿Deseas iniciar la instalación ahora?" 14 60
-
-if [ $? -ne 0 ]; then
-    clear
-    echo "Instalación cancelada por el usuario."
-    exit 1
-fi
+APP_DIR="/opt/race-control-server"
+SERVICE_NAME="race-control"
 
 clear
-echo "🛠️ Iniciando instalación de dependencias base..."
-apt-get install -y ffmpeg curl software-properties-common wget build-essential git
+echo "============================================================"
+echo "  🚀 INSTALADOR RACE CONTROL SERVER"
+echo "  Instalación directa en Debian (sin Docker)"
+echo "============================================================"
+echo ""
 
-echo "📦 Instalando Node.js..."
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
-
-echo "📂 Configurando el entorno de la aplicación..."
-APP_DIR="/opt/srt-server"
-rm -rf $APP_DIR
-mkdir -p $APP_DIR
-
-echo "💽 Instalando y configurando Auto-Montador moderno de memorias USB (udevil)..."
-apt-get install -y ntfs-3g exfatprogs udevil
-# Activar el servicio devmon en segundo plano para que escuche cuándo se pincha un USB y lo monte en /media
-systemctl enable devmon@root
-systemctl start devmon@root
-
-# Forzar instalación de git si falló en el primer bloque
+# ── 1. Actualizar sistema ─────────────────────────────────────
+echo "📦 [1/6] Actualizando sistema..."
 apt-get update -qq
-apt-get install -y git
 
-echo "Copiando archivos..."
-# IMPORTANTE: Cambia esta URL por la de tu repositorio de GitHub real.
-GITHUB_REPO="https://github.com/tossalet/rtsp-server-tsst.git"
-git clone $GITHUB_REPO $APP_DIR
-cd $APP_DIR
+# ── 2. Instalar dependencias del sistema ──────────────────────
+echo "📦 [2/6] Instalando FFmpeg, SQLite e Intel QSV..."
+apt-get install -y --no-install-recommends \
+    ffmpeg \
+    sqlite3 \
+    iproute2 \
+    curl \
+    intel-media-va-driver \
+    vainfo \
+    git \
+    build-essential \
+    python3
 
-echo "⚙️ Instalando dependencias de Node (npm install)..."
+echo "✅ Dependencias del sistema instaladas."
+
+# ── 3. Instalar Node.js 20 LTS ────────────────────────────────
+echo ""
+echo "📦 [3/6] Instalando Node.js 20 LTS..."
+if ! node --version 2>/dev/null | grep -q "v20"; then
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+fi
+echo "✅ Node.js $(node --version) instalado."
+
+# ── 4. Clonar o actualizar el repositorio ─────────────────────
+echo ""
+echo "📦 [4/6] Preparando el código de la aplicación..."
+if [ -d "$APP_DIR/.git" ]; then
+    echo "   Repositorio existente encontrado. Actualizando..."
+    git -C "$APP_DIR" pull
+else
+    echo "   Clonando repositorio desde GitHub..."
+    git clone https://github.com/tossalet/rtsp-server-tsst "$APP_DIR"
+fi
+
+# ── 5. Instalar dependencias npm (compiladas para Linux) ───────
+echo ""
+echo "📦 [5/6] Instalando dependencias Node.js (compilando para Linux)..."
+cd "$APP_DIR"
 npm install --omit=dev
+echo "✅ Dependencias npm instaladas y compiladas para Linux."
 
-# Crear archivo .env para el puerto
-echo "PORT=$WEB_PORT" > .env
-# Si nuestra app lee SRT_PORT del .env, también lo ponemos (dependiendo de nuestra lógica en app)
-echo "SRT_BASE_PORT=$SRT_PORT" >> .env
+# ── 6. Crear servicio systemd ─────────────────────────────────
+echo ""
+echo "⚙️  [6/6] Configurando servicio del sistema (arranque automático)..."
 
-echo "🚀 Creando servicio de arranque automático (Systemd)..."
-cat <<EOF > /etc/systemd/system/tsst-srt.service
+cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
-Description=Servidor SRT TSST y Panel Web
+Description=Race Control Server (RTSP/SRT)
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/node $APP_DIR/server.js
-WorkingDirectory=$APP_DIR
-Restart=always
+Type=simple
 User=root
-Environment=PATH=/usr/bin:/usr/local/bin
+WorkingDirectory=${APP_DIR}
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
 Environment=NODE_ENV=production
-EnvironmentFile=/opt/srt-server/.env
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Refrescar y activar que inicie en cada arranque
 systemctl daemon-reload
-systemctl enable tsst-srt.service
-systemctl start tsst-srt.service
-systemctl status tsst-srt.service --no-pager
+systemctl enable ${SERVICE_NAME}
+systemctl restart ${SERVICE_NAME}
 
+# ── Resultado ─────────────────────────────────────────────────
+sleep 2
 LOCAL_IP=$(hostname -I | awk '{print $1}')
+STATUS=$(systemctl is-active ${SERVICE_NAME})
 
-whiptail --title "¡Instalación Completada!" --msgbox "El Servidor SRT se ha instalado correctamente y se ha programado para auto-arrancarse cada vez que enciendas la Raspberry.\n\nPuedes acceder a tu panel de control desde cualquier navegador en la red ingresando a:\n\n👉 http://$LOCAL_IP:$WEB_PORT" 15 65
-
-clear
-echo "✅ ¡Instalación Finalizada con éxito!"
-echo "📍 Panel Web en: http://$LOCAL_IP:$WEB_PORT"
+echo ""
+echo "============================================================"
+if [ "$STATUS" = "active" ]; then
+    echo "  ✅ ¡INSTALACIÓN COMPLETADA CON ÉXITO!"
+else
+    echo "  ⚠️  Instalación completada (verifica el estado: systemctl status ${SERVICE_NAME})"
+fi
+echo "============================================================"
+echo ""
+echo "  📍 Panel de control web:"
+echo "  👉 http://$LOCAL_IP:4000"
+echo ""
+echo "  🔧 Comandos útiles:"
+echo "     Ver logs en tiempo real:  journalctl -u ${SERVICE_NAME} -f"
+echo "     Reiniciar servidor:       systemctl restart ${SERVICE_NAME}"
+echo "     Detener servidor:         systemctl stop ${SERVICE_NAME}"
+echo "     Ver estado:               systemctl status ${SERVICE_NAME}"
+echo ""
+echo "  💡 Para verificar aceleración Intel QSV:"
+echo "     vainfo"
+echo "============================================================"

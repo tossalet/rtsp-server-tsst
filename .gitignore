@@ -7,3 +7,6 @@ OnPremise-ISO/
 log.txt
 out.log
 .env
+_backup_pre_revision/
+media/
+logs/

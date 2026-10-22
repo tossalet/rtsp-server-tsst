@@ -1,31 +1,35 @@
-# Base image build on Debian 11 (Bullseye) to mimic the OnPremise firmware natively
-FROM node:18-bullseye-slim
+# ============================================================
+# Race Control Server — Docker Image
+# Base: Debian 12 (Bookworm) + Node.js 20 LTS
+# Hardware: Intel UHD 630 (QSV via VAAPI)
+# ============================================================
+FROM node:20-bookworm-slim
 
-# Install FFMpeg and other required networking utilities for TSST Server
-RUN apt-get update && apt-get install -y \
+# ── Sistema: repositorios contrib/non-free para drivers Intel ──
+RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' \
+    /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+
+# ── Sistema: solo lo necesario en tiempo de ejecución ─────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    sqlite3 \
-    iproute2 \
-    curl \
+    intel-media-va-driver \
+    vainfo \
     && rm -rf /var/lib/apt/lists/*
 
-# Create working directory
 WORKDIR /usr/src/app
 
-# Copy package info
+# ── Dependencias primero (capa cacheada si no cambia package.json) ──
+# Las herramientas de compilación solo se usan si sqlite3 no trae binario precompilado y se eliminan en la misma capa
 COPY package*.json ./
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && npm ci --omit=dev \
+    && apt-get purge -y python3 make g++ && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
 
-# Install npm dependencies
-RUN npm install
-
-# Copy application files
+# ── Código fuente (.dockerignore excluye node_modules, ffmpeg de Windows, media, BD...) ──
 COPY . .
 
-# Expose Web Panel & API port
 EXPOSE 4000
-# Expose default SRT/UDP port ranges (example: 1024-50000 range, usually map via host networking anyway)
-EXPOSE 1024-50000/udp
+# Con network_mode: host (docker-compose) no hace falta publicar el rango de puertos SRT
 
-# Set initial database if needed (SQLite auto-creates so it's fine)
-# Start the backend node process
 CMD ["node", "server.js"]
