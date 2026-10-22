@@ -6,7 +6,7 @@ const isProd = process.env.NODE_ENV === 'production' || process.env.DOCKER_ENV;
 const dbDir = path.join(__dirname, 'data');
 if (isProd && !fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
-const dbPath = isProd ? path.join(dbDir, 'onpremise.db') : path.resolve(__dirname, 'onpremise.db');
+const dbPath = isProd ? path.join(dbDir, 'race-control.db') : path.resolve(__dirname, 'race-control.db');
 
 let resolveReady;
 const ready = new Promise(r => { resolveReady = r; });
