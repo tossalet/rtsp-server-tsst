@@ -1032,17 +1032,24 @@ async function submitOutput(e) {
     };
 
     const isEdit = document.getElementById('out_is_edit').value === 'true';
+    let res;
     if(isEdit) {
         const oId = document.getElementById('out_edit_id').value;
-        await fetch(`/api/outputs/${oId}`, {
+        res = await fetch(`/api/outputs/${oId}`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
     } else {
-        await fetch('/api/outputs', {
+        res = await fetch('/api/outputs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
     }
-    
+    // Si el servidor rechaza (p.ej. puerto SRT ya usado) avisar y dejar el formulario abierto para corregir
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'No se pudo guardar la salida');
+        return;
+    }
+
     closeModal('outputModal');
     e.target.reset();
     document.getElementById('out_is_edit').value = 'false';

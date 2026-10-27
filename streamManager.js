@@ -16,9 +16,48 @@ const telemetryCache = {};
 // Sin puertos TCP locales, sin timeouts de 1.5s y, al reiniciarse la cámara, los outputs
 // siguen suscritos (antes se quedaban colgados en el router viejo y el SRT moría).
 const hubs = {};
-const MAX_SUB_BUFFER = 8 * 1024 * 1024; // 8MB: si un consumidor se atasca (p.ej. SRT listener sin caller) se descartan chunks
+const MAX_SUB_BUFFER = 2 * 1024 * 1024; // 2MB (~2s): si un consumidor se atasca (SRT listener sin caller) se descartan chunks
 const INPUT_STALL_MS = 20000;           // Sin datos de la cámara durante 20s -> matar y reconectar
 const RESTART_DELAY_MS = 5000;
+const OUTPUT_RESTART_MS = 2000;         // Listener SRT: reabrir rápido para que Race Control pueda reconectar
+const OUTPUT_FAIL_RESTART_MS = 10000;   // Si FFmpeg muere nada más arrancar (URL mala, puerto ocupado) no machacar
+
+// FFmpeg/libsrt espera latency, rcvlatency y peerlatency en MICROSEGUNDOS (por defecto 120ms).
+// Un valor < 1000 casi seguro se escribió pensando en ms (latency=200 serían 0.2ms -> pérdidas): se convierte.
+function normalizeSrtUrl(url) {
+    if (!url.startsWith('srt://')) return url;
+    return url.replace(/([?&](?:latency|rcvlatency|peerlatency)=)(\d+)/g, (m, key, val) => {
+        const n = parseInt(val, 10);
+        if (n > 0 && n < 1000) {
+            console.log(`[SRT] ${key.slice(1, -1)}=${n} interpretado como ms -> ${n * 1000} µs`);
+            return key + (n * 1000);
+        }
+        return m;
+    });
+}
+
+// rtsp://usuario:clave@ip -> rtsp://***@ip para que las contraseñas de las cámaras no acaben en el log
+function maskCredentials(text) {
+    return text
+        .replace(/(\w+:\/\/)[^\s\/]*@/g, '$1***@') // codicioso: hasta la última @ (claves con @)
+        .replace(/(passphrase=)[^&\s]+/g, '$1***'); // clave de cifrado SRT
+}
+
+// Guarda las últimas líneas de error de FFmpeg (sin progreso) para mostrarlas si el proceso muere
+function makeStderrTail(size = 6) {
+    const lines = [];
+    return {
+        push(text) {
+            for (const raw of text.split(/\r?\n|\r/)) {
+                const l = raw.trim();
+                if (!l || /^(frame|fps|size|stream_\d|bitrate|progress)=/.test(l) || l.startsWith('frame=')) continue;
+                lines.push(l);
+                if (lines.length > size) lines.shift();
+            }
+        },
+        text() { return lines.join(' | '); }
+    };
+}
 
 function getHub(channel) {
     if (!hubs[channel]) hubs[channel] = new Set();
@@ -103,7 +142,7 @@ function startInput(inputObj) {
         args.push('-rtsp_transport', 'tcp');
     }
 
-    args.push('-i', url);
+    args.push('-i', normalizeSrtUrl(url));
     args.push('-map', '0:v?', '-map', '0:a?');
     args.push('-c:v', 'copy');
     args.push('-c:a', 'aac', '-b:a', '128k'); // G.711 de cámaras no cabe en MPEG-TS: se pasa a AAC una sola vez aquí
@@ -115,8 +154,9 @@ function startInput(inputObj) {
     args.push('pipe:1');
 
     const ffmpegCmd = getFFmpegPath();
-    console.log(`[STARTING INPUT ${channel}] ${ffmpegCmd} ${args.join(' ')}`);
+    console.log(`[STARTING INPUT ${channel}] ${ffmpegCmd} ${maskCredentials(args.join(' '))}`);
     const child = spawn(ffmpegCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const errTail = makeStderrTail();
 
     const state = {
         process: child,
@@ -144,6 +184,7 @@ function startInput(inputObj) {
 
     child.stderr.on('data', (data) => {
         const out = data.toString();
+        errTail.push(out);
 
         // Extraer codec en cuanto aparezca (suele estar en los primeros chunks)
         if (!codecFound) {
@@ -193,6 +234,7 @@ function startInput(inputObj) {
 
         if (state.intentionalStop) return;
 
+        if (code !== 0) console.error(`[IN-${channel}] FFmpeg: ${maskCredentials(errTail.text()) || 'sin detalle'}`);
         console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in ${RESTART_DELAY_MS / 1000}s...`);
         // Turn yellow in UI (we fake an active signal with 0 bitrate)
         if (ioInstance) ioInstance.emit('stats', { channel: channel, active: true, bitrate: '0.0kbits/s', time: '--:--:--' });
@@ -284,7 +326,7 @@ function startOutput(outputObj) {
     const isRtmp = url.startsWith('rtmp');
     const isDisk = url.startsWith('disk://');
     let format = 'mpegts';
-    let destUrl = url;
+    let destUrl = normalizeSrtUrl(url);
 
     if (isRtmp) format = 'flv';
     if (isDisk) {
@@ -369,11 +411,12 @@ function startOutput(outputObj) {
     args.push('-f', format, destUrl);
 
     const ffmpegCmd = getFFmpegPath();
-    console.log(`[STARTING OUTPUT ${id}] ${ffmpegCmd} ${args.join(' ')}`);
+    console.log(`[STARTING OUTPUT ${id}] ${ffmpegCmd} ${maskCredentials(args.join(' '))}`);
     const child = spawn(ffmpegCmd, args, { stdio: ['pipe', 'ignore', 'pipe'] });
     subscribe(channel, child.stdin);
+    const errTail = makeStderrTail();
 
-    const state = { process: child, parentChannel: channel, outputObj, lastUpdate: Date.now(), intentionalStop: false, autoRestart: null };
+    const state = { process: child, parentChannel: channel, outputObj, startedAt: Date.now(), lastUpdate: Date.now(), intentionalStop: false, autoRestart: null };
     activeOutputs[id] = state;
 
     child.on('error', (err) => {
@@ -389,6 +432,7 @@ function startOutput(outputObj) {
     child.stderr.on('data', (data) => {
         const now = Date.now();
         const out = data.toString();
+        errTail.push(out);
 
         if (isHWCodec && (now - hwStartTime) < 20000) {
             out.split('\n').forEach(line => {
@@ -423,12 +467,17 @@ function startOutput(outputObj) {
         unsubscribe(channel, child.stdin);
         if (activeOutputs[id] !== state || state.intentionalStop) return;
 
-        console.log(`[OUT-${id}] Connection lost or crashed. Auto-restarting target in 10s...`);
+        // Muerte inmediata = fallo de configuración (puerto ocupado, URL mala): esperar más y enseñar el error.
+        // Si llevaba un rato, lo normal es que el receptor (Race Control) se haya desconectado: reabrir rápido.
+        const failedFast = Date.now() - state.startedAt < 5000;
+        const delay = failedFast ? OUTPUT_FAIL_RESTART_MS : OUTPUT_RESTART_MS;
+        if (failedFast) console.error(`[OUT-${id}] FFmpeg: ${maskCredentials(errTail.text()) || 'sin detalle'}`);
+        console.log(`[OUT-${id}] Receptor desconectado o fallo. Reiniciando salida en ${delay / 1000}s...`);
         state.autoRestart = setTimeout(() => {
             if (activeOutputs[id] !== state) return;
             delete activeOutputs[id];
             startOutput(outputObj);
-        }, 10000);
+        }, delay);
     });
 
     return true;

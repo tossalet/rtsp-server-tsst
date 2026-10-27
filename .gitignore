@@ -10,3 +10,4 @@ out.log
 _backup_pre_revision/
 media/
 logs/
+public/thumbs/*.jpg

@@ -256,6 +256,24 @@ app.delete('/api/inputs/:channel', (req, res) => {
 /* =======================================
  *  REST API: OUTPUTS
  * ======================================= */
+
+// Puerto de una URL SRT en modo listener (srt://0.0.0.0:9102?mode=listener), o null
+function srtListenerPort(url) {
+    const m = typeof url === 'string' && url.match(/^srt:\/\/[^:\/?]*:(\d+)/);
+    return m && /[?&]mode=listener/.test(url) ? m[1] : null;
+}
+
+// libsrt reutiliza la dirección por defecto: dos listeners en el mismo puerto NO dan error y el
+// receptor se conectaría a uno al azar. Se impide al guardar.
+function checkPortConflict(url, ownId, cb) {
+    const port = srtListenerPort(url);
+    if (!port) return cb(null);
+    db.all('SELECT id, url FROM outputs UNION ALL SELECT -channel AS id, url FROM inputs', [], (err, rows) => {
+        if (err) return cb(null);
+        const clash = rows.find(r => String(r.id) !== String(ownId) && srtListenerPort(r.url) === port);
+        cb(clash ? `El puerto SRT ${port} ya lo usa ${clash.id < 0 ? 'el input ' + (-clash.id) : 'la salida ' + clash.id}` : null);
+    });
+}
 app.get('/api/outputs', (req, res) => {
     db.all('SELECT * FROM outputs', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -269,6 +287,9 @@ app.post('/api/outputs', (req, res) => {
 
     db.get('SELECT channel FROM inputs WHERE channel = ?', [channel], (err, parentRaw) => {
         if (err || !parentRaw) return res.status(400).json({ error: "Parent input not found" });
+
+        checkPortConflict(url, null, (conflict) => {
+        if (conflict) return res.status(409).json({ error: conflict });
 
         const query = `INSERT INTO outputs (channel, url, location, remote, enabled, udpsrv, vcodec)
                        VALUES (?, ?, ?, ?, ?, 0, ?)`;
@@ -285,6 +306,7 @@ app.post('/api/outputs', (req, res) => {
                     if (row) streamManager.startOutput(row);
                 });
             }
+        });
         });
     });
 });
@@ -310,16 +332,21 @@ app.post('/api/outputs/:id/toggle', (req, res) => {
 app.put('/api/outputs/:id', (req, res) => {
     const id = req.params.id;
     const { url, location, vcodec } = req.body;
-    db.run(`UPDATE outputs SET url = ?, location = ?, vcodec = ? WHERE id = ?`, [url, location, vcodec || 'copy', id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        const changes = this.changes;
+    if (!url) return res.status(400).json({ error: 'Missing url' });
+    checkPortConflict(url, id, (conflict) => {
+        if (conflict) return res.status(409).json({ error: conflict });
 
-        // Restart the process if it was running with new data
-        streamManager.stopOutput(id);
-        db.get('SELECT * FROM outputs WHERE id = ?', [id], (err, row) => {
-            if (row && row.enabled) streamManager.startOutput(row);
-            io.emit('db_update', { event: 'outputs_changed' });
-            res.json({ updated: changes });
+        db.run(`UPDATE outputs SET url = ?, location = ?, vcodec = ? WHERE id = ?`, [url, location || '', vcodec || 'copy', id], function(err) {
+            if (err) return res.status(500).json({ error: err.message });
+            const changes = this.changes;
+
+            // Restart the process if it was running with new data
+            streamManager.stopOutput(id);
+            db.get('SELECT * FROM outputs WHERE id = ?', [id], (err, row) => {
+                if (row && row.enabled) streamManager.startOutput(row);
+                io.emit('db_update', { event: 'outputs_changed' });
+                res.json({ updated: changes });
+            });
         });
     });
 });
