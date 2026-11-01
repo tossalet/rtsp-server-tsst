@@ -38,8 +38,17 @@ Todas las salidas SRT usan la misma latencia (200 ms desde el panel), así que e
 
 ## SRT
 
+- **Cuadraditos (macrobloques) = latencia SRT corta para la red.** La latencia es el buffer donde SRT recupera
+  los paquetes perdidos. Se elige en cada salida desde el panel: 250 ms (cable perfecto), **500 ms (por defecto)**,
+  1000 ms (WiFi / radioenlace), 2000 ms. Emisor y receptor negocian y gana la mayor, así que subirla aquí
+  arregla también a Race Control y vMix. Regla práctica: latencia ≥ 4 × el ping entre equipos.
+  Prueba con red simulada (5 % pérdida, 160 ms de ida y vuelta, 1080p 8 Mbps): 250 ms → 154 errores, 500 ms → 37, 1000 ms → 0.
+- Si el log muestra `no da abasto: descartados ... KB`, el problema no es la red sino que ese receptor
+  o el disco no consumen a tiempo.
 - Los parámetros `latency`, `rcvlatency` y `peerlatency` de FFmpeg van en **microsegundos**
-  (`latency=200000` = 200 ms). Si se escribe un valor < 1000 (p.ej. `latency=200`) el servidor lo interpreta como ms y lo convierte.
+  (`latency=500000` = 500 ms). Si se escribe un valor < 1000 (p.ej. `latency=200`) el servidor lo interpreta como ms
+  y lo convierte. Una URL SRT sin `latency` recibe 500 ms (libsrt pondría 120 ms).
+- Las salidas creadas con la web antigua (200 ms) se pasan solas a 500 ms al arrancar.
 - Cifrado opcional: añadir `&passphrase=CLAVE_DE_10_A_79_CARACTERES&pbkeylen=16` a la URL de la salida y la misma clave en Race Control.
 
 ## Diagnóstico

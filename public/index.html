@@ -301,6 +301,19 @@
                         <select id="out_disk" class="form-control" style="width:100%"></select>
                     </div>
                 </div>
+                <div class="form-group row" id="out_latency_container">
+                    <div class="full" style="width:100%;">
+                        <label>Latencia SRT (buffer de recuperación de paquetes)</label>
+                        <select id="out_latency" class="form-control">
+                            <option value="250">250 ms · Red por cable sin pérdidas</option>
+                            <option value="500" selected>500 ms · Recomendado (evita cuadraditos)</option>
+                            <option value="1000">1000 ms · WiFi / radioenlace</option>
+                            <option value="2000">2000 ms · Enlaces con muchas pérdidas</option>
+                        </select>
+                        <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">Si aparecen macrobloques (cuadraditos), sube la latencia. Emisor y receptor usan la mayor de las dos.</small>
+                    </div>
+                </div>
+                <input type="hidden" id="out_srt_extra" value="">
                 <div class="form-group row" id="out_vcodec_group">
                     <div class="full" style="width:100%;">
                         <label>Códec de Vídeo (Opciones de Transcodificación)</label>

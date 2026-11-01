@@ -77,6 +77,13 @@ function initDB() {
         db.run("ALTER TABLE outputs ADD COLUMN was_enabled INTEGER NOT NULL DEFAULT 0", () => {});
         db.run("ALTER TABLE ports ADD COLUMN rtmpPort INTEGER NOT NULL DEFAULT 1935", () => {});
 
+        // Las salidas SRT creadas con la web antigua llevaban latency=200000 (200 ms), corto para estas redes
+        // (macrobloques). Pasan a 500 ms. La web nueva ya no genera 200000, así que no pisa elecciones del usuario.
+        db.run(`UPDATE outputs SET url = REPLACE(url, '&latency=200000', '&latency=500000')
+                WHERE url LIKE 'srt://%' AND (url LIKE '%&latency=200000' OR url LIKE '%&latency=200000&%')`, function(err) {
+            if (!err && this.changes > 0) console.log(`[DB] ${this.changes} salida(s) SRT pasadas de 200 ms a 500 ms de latencia`);
+        });
+
         // Insert initial configuration defaults if empty (cada tabla por separado)
         db.get('SELECT COUNT(*) AS count FROM users', (err, row) => {
             if (row && row.count === 0) {

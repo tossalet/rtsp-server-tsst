@@ -703,6 +703,7 @@ function openOutputModal(channel) {
     document.getElementById('out_is_edit').value = 'false';
     document.querySelector('#outputModal .modal-header h3').innerText = 'Add Output';
     document.getElementById('formOutput').reset();
+    document.getElementById('out_srt_extra').value = ''; // reset() no limpia los hidden
     updateOutputFields();
     openModal('outputModal');
 }
@@ -723,6 +724,7 @@ function updateOutputFields() {
     
     // Default hiding
     diskContainer.style.display = 'none';
+    document.getElementById('out_latency_container').style.display = (proto === 'srt') ? 'block' : 'none';
 
     if (proto === 'srt') {
         modeContainer.style.display = 'block';
@@ -911,6 +913,7 @@ function openEditOutput(id) {
     
     document.getElementById('out_is_edit').value = 'true';
     document.getElementById('out_edit_id').value = id;
+    document.getElementById('out_srt_extra').value = '';
     document.getElementById('out_location').value = out.location;
     document.getElementById('out_vcodec').value = out.vcodec || 'copy';
     
@@ -925,6 +928,16 @@ function openEditOutput(id) {
             const ipMatch = out.url.match(/\/\/([^:]+)/);
             if(ipMatch) document.getElementById('out_ip').value = ipMatch[1];
         }
+        // Latencia (µs en la URL -> ms en el selector); si es un valor no listado se añade como opción
+        const latMatch = out.url.match(/[?&]latency=(\d+)/);
+        const latMs = latMatch ? Math.round(parseInt(latMatch[1]) / 1000) : 500;
+        const latSel = document.getElementById('out_latency');
+        if (!Array.from(latSel.options).some(o => o.value == latMs)) latSel.add(new Option(`${latMs} ms`, latMs));
+        latSel.value = latMs;
+        // Conservar el resto de parámetros (passphrase, pbkeylen, streamid...) al guardar
+        const query = out.url.split('?')[1] || '';
+        document.getElementById('out_srt_extra').value = query.split('&')
+            .filter(p => p && !/^(mode|pkt_size|latency)=/.test(p)).join('&');
     } else if (out.url.startsWith('rtmp://127.0.0.1:1935/out/')) {
         document.getElementById('out_protocol').value = 'rtmp_local';
         document.getElementById('out_port').value = out.url.replace('rtmp://127.0.0.1:1935/out/', '');
@@ -1016,8 +1029,10 @@ async function submitOutput(e) {
         const mode = document.getElementById('out_mode').value;
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
         if(!port) { alert('El puerto es obligatorio'); return; }
-        // Se añade pkt_size=1316 (estándar MTU para MPEG-TS) y latency=200000 (200ms) para absorber micro-jitter de red y CPU
-        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=200000`;
+        // pkt_size=1316 (7 paquetes TS, estándar MTU) y latency en µs (FFmpeg/libsrt) desde el selector en ms
+        const latencyMs = parseInt(document.getElementById('out_latency').value) || 500;
+        const extra = document.getElementById('out_srt_extra').value;
+        outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=${latencyMs * 1000}${extra ? '&' + extra : ''}`;
     } else {
         const ip = document.getElementById('out_ip').value || '127.0.0.1';
         if(!port) { alert('El puerto es obligatorio'); return; }

@@ -16,7 +16,14 @@ const telemetryCache = {};
 // Sin puertos TCP locales, sin timeouts de 1.5s y, al reiniciarse la cámara, los outputs
 // siguen suscritos (antes se quedaban colgados en el router viejo y el SRT moría).
 const hubs = {};
-const MAX_SUB_BUFFER = 2 * 1024 * 1024; // 2MB (~2s): si un consumidor se atasca (SRT listener sin caller) se descartan chunks
+// Control de consumidores lentos. Descartar datos de un receptor ACTIVO corrompe la imagen (macrobloques)
+// hasta el siguiente keyframe, así que los atascos breves se absorben en RAM sin perder nada.
+// Solo se descarta cuando el consumidor lleva >3s sin vaciar (p.ej. listener SRT esperando a Race Control),
+// y entonces con un tope pequeño para que al conectar no reciba segundos de vídeo viejo.
+const SUB_LOW_WATER = 256 * 1024;            // por debajo: consumidor al día
+const SUB_STUCK_MS = 3000;                   // sin bajar de LOW_WATER durante 3s = parado
+const MAX_SUB_BUFFER = 32 * 1024 * 1024;     // atasco breve: hasta 32MB sin descartar
+const MAX_STUCK_BUFFER = 1 * 1024 * 1024;    // parado: tope 1MB
 const INPUT_STALL_MS = 20000;           // Sin datos de la cámara durante 20s -> matar y reconectar
 const RESTART_DELAY_MS = 5000;
 const OUTPUT_RESTART_MS = 2000;         // Listener SRT: reabrir rápido para que Race Control pueda reconectar
@@ -24,8 +31,11 @@ const OUTPUT_FAIL_RESTART_MS = 10000;   // Si FFmpeg muere nada más arrancar (U
 
 // FFmpeg/libsrt espera latency, rcvlatency y peerlatency en MICROSEGUNDOS (por defecto 120ms).
 // Un valor < 1000 casi seguro se escribió pensando en ms (latency=200 serían 0.2ms -> pérdidas): se convierte.
+// Sin latency en la URL libsrt usa 120 ms, poco para estas redes (macrobloques): se pone 500 ms por defecto.
+const DEFAULT_SRT_LATENCY_US = 500000;
 function normalizeSrtUrl(url) {
     if (!url.startsWith('srt://')) return url;
+    if (!/[?&]latency=/.test(url)) url += (url.includes('?') ? '&' : '?') + 'latency=' + DEFAULT_SRT_LATENCY_US;
     return url.replace(/([?&](?:latency|rcvlatency|peerlatency)=)(\d+)/g, (m, key, val) => {
         const n = parseInt(val, 10);
         if (n > 0 && n < 1000) {
@@ -64,8 +74,12 @@ function getHub(channel) {
     return hubs[channel];
 }
 
-function subscribe(channel, stream) {
+function subscribe(channel, stream, label) {
     const hub = getHub(channel);
+    stream._label = label; // null = no avisar de descartes
+    stream._lowAt = Date.now();
+    stream._dropped = 0;
+    stream._dropLogAt = 0;
     hub.add(stream);
     stream.on('error', () => hub.delete(stream)); // EPIPE cuando FFmpeg muere: no debe tumbar Node
     stream.on('close', () => hub.delete(stream));
@@ -78,9 +92,25 @@ function unsubscribe(channel, stream) {
 function broadcast(channel, chunk) {
     const hub = hubs[channel];
     if (!hub) return;
+    const now = Date.now();
     for (const sub of hub) {
         if (sub.destroyed) { hub.delete(sub); continue; }
-        if (sub.writableLength > MAX_SUB_BUFFER) continue; // consumidor lento: descartar en vez de acumular RAM
+        const queued = sub.writableLength;
+        if (queued < SUB_LOW_WATER) sub._lowAt = now;
+        const stuck = now - sub._lowAt > SUB_STUCK_MS;
+        if (queued > (stuck ? MAX_STUCK_BUFFER : MAX_SUB_BUFFER)) {
+            // Un receptor parado (esperando conexión) descarta sin avisar: es lo normal.
+            // Un receptor activo que no da abasto sí se avisa: es causa directa de macrobloques.
+            if (!stuck && sub._label) {
+                sub._dropped += chunk.length;
+                if (now - sub._dropLogAt > 10000) {
+                    sub._dropLogAt = now;
+                    console.error(`[CH-${channel}] ${sub._label} no da abasto: descartados ${Math.round(sub._dropped / 1024)} KB (imagen con macrobloques)`);
+                    sub._dropped = 0;
+                }
+            }
+            continue;
+        }
         sub.write(chunk);
     }
 }
@@ -263,7 +293,7 @@ function startPreview(channel, singleFrame = false) {
 
     const child = spawn(getFFmpegPath(), args, { stdio: ['pipe', 'ignore', 'ignore'] });
     inp.prevProcess = child;
-    subscribe(channel, child.stdin);
+    subscribe(channel, child.stdin, null); // miniatura: si se retrasa da igual perder datos, no se avisa
 
     child.on('error', (err) => {
         console.error(`[PREVIEW ERROR CH-${channel}] Failed to run ffmpeg:`, err.message);
@@ -413,7 +443,7 @@ function startOutput(outputObj) {
     const ffmpegCmd = getFFmpegPath();
     console.log(`[STARTING OUTPUT ${id}] ${ffmpegCmd} ${maskCredentials(args.join(' '))}`);
     const child = spawn(ffmpegCmd, args, { stdio: ['pipe', 'ignore', 'pipe'] });
-    subscribe(channel, child.stdin);
+    subscribe(channel, child.stdin, `salida ${id} (${maskCredentials(url)})`);
     const errTail = makeStderrTail();
 
     const state = { process: child, parentChannel: channel, outputObj, startedAt: Date.now(), lastUpdate: Date.now(), intentionalStop: false, autoRestart: null };
