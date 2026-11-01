@@ -234,16 +234,25 @@
                 </div>
                 <input type="hidden" id="inp_protocol" value="rtsp">
                 <input type="hidden" id="inp_mode" value="">
-                <div class="form-group row" id="inp_ip_container">
-                    <div class="half" style="width: 70%;">
-                        <label id="inp_ip_label">URL RTSP de la Cámara</label>
-                        <input type="text" id="inp_ip" placeholder="rtsp://admin:12345@192.168.1.100:554/cam/realmonitor..." required>
+                <div class="form-group" id="inp_ip_container">
+                    <label id="inp_ip_label">URL RTSP de la Cámara</label>
+                    <input type="text" id="inp_ip" placeholder="rtsp://admin:12345@192.168.1.100:554/cam/realmonitor..." required>
+                </div>
+                <div class="form-group row">
+                    <div class="half">
+                        <label>Latencia (ms)</label>
+                        <input type="number" id="inp_latency" min="0" max="10000" step="1" placeholder="0 = Auto" value="0" list="latency_suggestions"
+                               title="SRT: buffer de recuperación de paquetes (0 = 500 ms). RTSP: margen para absorber retardos irregulares de la cámara (0 = automático).">
                     </div>
-                    <div class="half" style="width: 25%;">
-                        <label>Buffer (MB)</label>
-                        <input type="number" id="inp_buffer" placeholder="0 = Auto" value="0" title="Aumentar (ej: 10) si la imagen tiene cortes o franjas en la base por pérdida de paquetes.">
+                    <div class="half">
+                        <label>Buffer de red (MB)</label>
+                        <input type="number" id="inp_buffer" min="0" max="64" placeholder="0 = Auto" value="0" title="Tamaño del buffer del socket. Aumentar (ej: 8) si la cámara manda ráfagas grandes y se ven cortes.">
                     </div>
                 </div>
+                <small style="color:var(--text-muted); font-size:0.75rem; margin:-8px 0 12px; display:block;">Si se ven cuadraditos en una entrada SRT, sube la latencia (500–1000 ms). En RTSP por TCP los cuadraditos suelen venir de la cámara o de la red hasta ella.</small>
+                <datalist id="latency_suggestions">
+                    <option value="250"></option><option value="500"></option><option value="1000"></option><option value="2000"></option>
+                </datalist>
                 <input type="hidden" id="inp_port" value="">
 
                 <div class="modal-actions">
@@ -303,14 +312,9 @@
                 </div>
                 <div class="form-group row" id="out_latency_container">
                     <div class="full" style="width:100%;">
-                        <label>Latencia SRT (buffer de recuperación de paquetes)</label>
-                        <select id="out_latency" class="form-control">
-                            <option value="250">250 ms · Red por cable sin pérdidas</option>
-                            <option value="500" selected>500 ms · Recomendado (evita cuadraditos)</option>
-                            <option value="1000">1000 ms · WiFi / radioenlace</option>
-                            <option value="2000">2000 ms · Enlaces con muchas pérdidas</option>
-                        </select>
-                        <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">Si aparecen macrobloques (cuadraditos), sube la latencia. Emisor y receptor usan la mayor de las dos.</small>
+                        <label>Latencia SRT (ms) · buffer de recuperación de paquetes</label>
+                        <input type="number" id="out_latency" min="20" max="10000" step="1" value="500" list="latency_suggestions">
+                        <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">250 = cable sin pérdidas · <b>500 = recomendado</b> · 1000 = WiFi/radioenlace · 2000 = enlaces malos. Si aparecen cuadraditos, súbela. Emisor y receptor usan la mayor de las dos.</small>
                     </div>
                 </div>
                 <input type="hidden" id="out_srt_extra" value="">

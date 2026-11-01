@@ -35,7 +35,8 @@ function initDB() {
             enabled INTEGER NOT NULL DEFAULT 1,
             udpsrv INTEGER NOT NULL DEFAULT 0,
             preview_enabled INTEGER NOT NULL DEFAULT 1,
-            buffer INTEGER NOT NULL DEFAULT 0
+            buffer INTEGER NOT NULL DEFAULT 0,
+            latency_ms INTEGER NOT NULL DEFAULT 0
         )`);
 
         // Table outputs
@@ -73,6 +74,7 @@ function initDB() {
         // ejecutaba sin existir la tabla y en una instalación nueva faltaba was_enabled.
         db.run("ALTER TABLE inputs ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 1", () => {});
         db.run("ALTER TABLE inputs ADD COLUMN buffer INTEGER NOT NULL DEFAULT 0", () => {});
+        db.run("ALTER TABLE inputs ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0", () => {});
         db.run("ALTER TABLE outputs ADD COLUMN vcodec TEXT NOT NULL DEFAULT 'copy'", () => {});
         db.run("ALTER TABLE outputs ADD COLUMN was_enabled INTEGER NOT NULL DEFAULT 0", () => {});
         db.run("ALTER TABLE ports ADD COLUMN rtmpPort INTEGER NOT NULL DEFAULT 1935", () => {});

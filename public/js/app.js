@@ -629,6 +629,7 @@ function renderStreams() {
                         <div style="font-size:0.85rem; color:var(--text-muted); line-height: 1.4; display:flex; flex-direction:column; gap:5px; min-width:0;">
                             <p><strong>URL Origen:</strong></p>
                             <span style="color:#fff; font-weight:600; font-family:monospace; word-break: break-all;">${input.url}</span>
+                            <span style="font-size:0.75rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${input.latency_ms ? input.latency_ms + ' ms' : 'auto'}${input.buffer ? ' · Buffer ' + input.buffer + ' MB' : ''}</span>
                         </div>
                     </div>
                     ${inputOutputs.map(out => `
@@ -641,6 +642,7 @@ function renderStreams() {
                                 <span class="stream-name" style="display:flex; flex-direction:column; line-height:1.2;">
                                     ${out.location || out.url.replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}
                                     <span style="font-size:0.70rem; color:var(--text-muted); font-family:monospace; font-weight:normal; user-select:all;">${out.url.replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
+                                    ${out.url.startsWith('srt') ? `<span style="font-size:0.70rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${srtLatencyMs(out.url)} ms</span>` : ''}
                                 </span>
                             </div>
                             <div class="mid-section">
@@ -788,6 +790,7 @@ function openEditInput(channel) {
     document.getElementById('inp_ip').value = input.url;
     const bufEl = document.getElementById('inp_buffer');
     if(bufEl) bufEl.value = input.buffer || 0;
+    document.getElementById('inp_latency').value = input.latency_ms || 0;
     
     updateInputFields();
     
@@ -907,6 +910,14 @@ function previewFile(url, fname) {
 
 
 
+// Latencia efectiva en ms de una URL SRT (la URL guarda µs; sin latency el servidor aplica 500 ms)
+function srtLatencyMs(url) {
+    const m = url.match(/[?&]latency=(\d+)/);
+    if (!m) return 500;
+    const v = parseInt(m[1]);
+    return v < 1000 ? v : Math.round(v / 1000); // < 1000 el servidor lo trata como ms
+}
+
 function openEditOutput(id) {
     const out = outputs.find(o => o.id === id);
     if (!out) return;
@@ -928,12 +939,8 @@ function openEditOutput(id) {
             const ipMatch = out.url.match(/\/\/([^:]+)/);
             if(ipMatch) document.getElementById('out_ip').value = ipMatch[1];
         }
-        // Latencia (µs en la URL -> ms en el selector); si es un valor no listado se añade como opción
-        const latMatch = out.url.match(/[?&]latency=(\d+)/);
-        const latMs = latMatch ? Math.round(parseInt(latMatch[1]) / 1000) : 500;
-        const latSel = document.getElementById('out_latency');
-        if (!Array.from(latSel.options).some(o => o.value == latMs)) latSel.add(new Option(`${latMs} ms`, latMs));
-        latSel.value = latMs;
+        // Latencia: µs en la URL -> ms en el editor
+        document.getElementById('out_latency').value = srtLatencyMs(out.url);
         // Conservar el resto de parámetros (passphrase, pbkeylen, streamid...) al guardar
         const query = out.url.split('?')[1] || '';
         document.getElementById('out_srt_extra').value = query.split('&')
@@ -982,7 +989,8 @@ async function submitInput(e) {
     const data = {
         name: document.getElementById('inp_name').value,
         url: outUrl,
-        buffer: parseInt(document.getElementById('inp_buffer').value) || 0
+        buffer: parseInt(document.getElementById('inp_buffer').value) || 0,
+        latency_ms: parseInt(document.getElementById('inp_latency').value) || 0
     };
     
     const isEdit = document.getElementById('inp_is_edit').value === 'true';
@@ -1030,7 +1038,7 @@ async function submitOutput(e) {
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
         if(!port) { alert('El puerto es obligatorio'); return; }
         // pkt_size=1316 (7 paquetes TS, estándar MTU) y latency en µs (FFmpeg/libsrt) desde el selector en ms
-        const latencyMs = parseInt(document.getElementById('out_latency').value) || 500;
+        const latencyMs = Math.min(10000, Math.max(20, parseInt(document.getElementById('out_latency').value) || 500));
         const extra = document.getElementById('out_srt_extra').value;
         outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=${latencyMs * 1000}${extra ? '&' + extra : ''}`;
     } else {

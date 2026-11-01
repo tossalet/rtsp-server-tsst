@@ -172,7 +172,21 @@ function startInput(inputObj) {
         args.push('-rtsp_transport', 'tcp');
     }
 
-    args.push('-i', normalizeSrtUrl(url));
+    // Latencia editable (ms, 0 = automático). SRT: buffer de recuperación de paquetes (sustituye al de la URL).
+    // RTSP: margen de demux/reordenación para absorber llegadas irregulares de la cámara.
+    let inputUrl = url;
+    const latencyMs = parseInt(inputObj.latency_ms, 10) || 0;
+    if (latencyMs > 0) {
+        if (url.startsWith('srt://')) {
+            inputUrl = /[?&]latency=\d+/.test(url)
+                ? url.replace(/([?&]latency=)\d+/, `$1${latencyMs * 1000}`)
+                : url + (url.includes('?') ? '&' : '?') + `latency=${latencyMs * 1000}`;
+        } else if (url.startsWith('rtsp://')) {
+            args.push('-max_delay', String(latencyMs * 1000));
+        }
+    }
+
+    args.push('-i', normalizeSrtUrl(inputUrl));
     args.push('-map', '0:v?', '-map', '0:a?');
     args.push('-c:v', 'copy');
     args.push('-c:a', 'aac', '-b:a', '128k'); // G.711 de cámaras no cabe en MPEG-TS: se pasa a AAC una sola vez aquí

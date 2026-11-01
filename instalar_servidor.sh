@@ -103,6 +103,18 @@ EOF
 systemctl enable chrony >/dev/null 2>&1
 systemctl restart chrony && echo "✅ Servidor NTP activo (UDP 123)." || echo "⚠️  No se pudo arrancar chrony (la app funciona igual)."
 
+# Buffers de red: Debian limita a ~208 KB lo que libsrt puede pedir (pide 8 MB). Con varias cámaras
+# en ráfaga el kernel descarta paquetes UDP antes de que SRT los vea -> macrobloques.
+cat > /etc/sysctl.d/90-race-control.conf << 'EOF'
+# Race Control: buffers de socket amplios para SRT/UDP con varias cámaras
+net.core.rmem_max = 26214400
+net.core.wmem_max = 26214400
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.core.netdev_max_backlog = 5000
+EOF
+sysctl -p /etc/sysctl.d/90-race-control.conf >/dev/null && echo "✅ Buffers de red ampliados para SRT." || echo "⚠️  No se pudieron aplicar los buffers de red."
+
 # ── 7. Crear servicio systemd ─────────────────────────────────
 echo ""
 echo "⚙️  [7/7] Configurando servicio del sistema (arranque automático)..."

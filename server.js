@@ -126,14 +126,21 @@ app.get('/api/inputs', (req, res) => {
     });
 });
 
+// Latencia de entrada en ms (0 = automático). null si no viene, para no pisar el valor guardado al editar
+function parseLatencyMs(v) {
+    if (v === undefined || v === null || v === '') return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? Math.min(10000, Math.max(0, n)) : 0;
+}
+
 app.post('/api/inputs', (req, res) => {
     const { url, name, provider, location, remote, enabled, buffer } = req.body;
 
     // udpsrv ya no se usa para enrutar (la distribución es por pipes en memoria); se conserva la columna por compatibilidad
-    const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv, preview_enabled, buffer)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)`;
+    const query = `INSERT INTO inputs (url, name, provider, location, remote, enabled, udpsrv, preview_enabled, buffer, latency_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`;
     const params = [ url || '', name || 'Stream', provider || 'TodoStreaming', location || '', remote || '',
-                     enabled !== false ? 1 : 0, buffer || 0 ];
+                     enabled !== false ? 1 : 0, buffer || 0, parseLatencyMs(req.body.latency_ms) || 0 ];
 
     db.run(query, params, function(err) {
         if (err) return res.status(500).json({ error: err.message });
@@ -220,9 +227,9 @@ app.post('/api/inputs/:channel/snapshot', (req, res) => {
 app.put('/api/inputs/:channel', (req, res) => {
     const channelId = req.params.channel;
     const { url, name, buffer } = req.body;
-    const query = `UPDATE inputs SET url = ?, name = ?, buffer = ? WHERE channel = ?`;
+    const query = `UPDATE inputs SET url = ?, name = ?, buffer = ?, latency_ms = COALESCE(?, latency_ms) WHERE channel = ?`;
 
-    db.run(query, [url, name, buffer || 0, channelId], function(err) {
+    db.run(query, [url, name, buffer || 0, parseLatencyMs(req.body.latency_ms), channelId], function(err) {
         if (err) return res.status(500).json({ error: err.message });
         const changes = this.changes;
 
