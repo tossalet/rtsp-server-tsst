@@ -14,6 +14,7 @@ const ready = new Promise(r => { resolveReady = r; });
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error connecting to SQLite database', err);
+        resolveReady(); // que la web arranque igual y el error se vea en el panel/log
     } else {
         console.log('Connected to SQLite database.');
         initDB();

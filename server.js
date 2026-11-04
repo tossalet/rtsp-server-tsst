@@ -587,4 +587,5 @@ server.on('error', (err) => {
     }
 });
 
-startListen();
+// No aceptar peticiones hasta que la BD tenga sus tablas: en una instalación nueva lo guardado en el primer segundo se perdía
+db.ready.then(startListen);

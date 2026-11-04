@@ -111,11 +111,21 @@ h1, h2, h3 { font-family: var(--font-heading); }
     padding: 2rem 3rem;
 }
 
+/* Cabecera fija: título de la sección y acciones (Add Input...) siempre visibles al hacer scroll.
+   Los márgenes negativos la extienden sobre el padding de .main-content para que el contenido no asome por los lados. */
 .topbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 3rem;
+    position: sticky;
+    top: -2rem; /* el sticky se mide desde dentro del padding de .main-content: así queda pegada al borde */
+    z-index: 50;
+    margin: -2rem -3rem 2rem;
+    padding: 1.5rem 3rem 1.25rem;
+    background: rgba(11, 15, 25, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--panel-border);
 }
 
 .page-title h1 {
@@ -368,6 +378,9 @@ input:checked + .slider:before { transform: translateX(18px); }
     .logo-container h2 { display: none; }
     .status-badge { display: none; }
     .main-content { padding: 1rem; }
-    .topbar { flex-direction: column; align-items: flex-start; gap: 15px; }
+    .topbar { flex-direction: row; align-items: center; gap: 10px; top: -1rem; margin: -1rem -1rem 1rem; padding: 0.75rem 1rem; }
+    .page-title p { display: none; } /* en móvil la cabecera fija ocupa lo mínimo */
+    .topbar .btn-primary { padding: 8px 12px; font-size: 0.85rem; white-space: nowrap; }
+    .page-title h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
     .form-group.row { flex-direction: column; }
 }
