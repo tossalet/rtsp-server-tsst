@@ -574,7 +574,7 @@ function renderStreams() {
         const inputOutputs = outputs.filter(o => o.channel === input.channel);
         
         let protocolBadge = 'srt';
-        let protocolText = 'RTSP';
+        let protocolText = /^srt:\/\//.test(input.url) ? (/[?&]mode=listener/.test(input.url) ? 'SRT LISTENER' : 'SRT') : 'RTSP';
 
         const isExpandedClass = expandedIds.has(`input-card-${input.channel}`) ? 'expand-mode' : '';
 
@@ -710,9 +710,50 @@ function openOutputModal(channel) {
     openModal('outputModal');
 }
 
+// "Add Input" siempre abre el formulario limpio: tras editar y cancelar seguía en modo edición
+// con los datos de esa cámara, y al guardar la sobrescribía en vez de crear una nueva
+function openAddInput() {
+    document.getElementById('formInput').reset();
+    document.getElementById('inp_is_edit').value = 'false';
+    document.getElementById('inp_edit_channel').value = '';
+    document.querySelector('#inputModal .modal-header h3').innerText = 'Add New Input Stream';
+    updateInputFields();
+    openModal('inputModal');
+}
+
 // API Interactions
 function updateInputFields() {
-    // Only RTSP logic needed, fields simplified in HTML
+    const proto = document.getElementById('inp_protocol').value;
+    const listener = proto === 'srt_listener';
+    const ipInput = document.getElementById('inp_ip');
+    document.getElementById('inp_ip_container').style.display = listener ? 'none' : 'block';
+    document.getElementById('inp_listener_container').style.display = listener ? 'flex' : 'none';
+    ipInput.required = !listener;
+    document.getElementById('inp_listen_port').required = listener;
+    if (proto === 'srt_caller') {
+        document.getElementById('inp_ip_label').innerText = 'URL SRT del emisor';
+        ipInput.placeholder = 'srt://192.168.1.50:9000?streamid=cam1&passphrase=...';
+    } else {
+        document.getElementById('inp_ip_label').innerText = 'URL RTSP de la Cámara';
+        ipInput.placeholder = 'rtsp://admin:12345@192.168.1.100:554/cam/realmonitor...';
+    }
+}
+
+// URL guardada -> campos del formulario (tipo de fuente, puerto y passphrase del listener)
+function fillInputFormFromUrl(url) {
+    const protoEl = document.getElementById('inp_protocol');
+    document.getElementById('inp_ip').value = url;
+    document.getElementById('inp_listen_port').value = '';
+    document.getElementById('inp_passphrase').value = '';
+    if (/^srt:\/\//.test(url) && /[?&]mode=listener/.test(url)) {
+        protoEl.value = 'srt_listener';
+        const port = url.match(/^srt:\/\/[^:\/?]*:(\d+)/);
+        const pass = url.match(/[?&]passphrase=([^&]+)/);
+        document.getElementById('inp_listen_port').value = port ? port[1] : '';
+        document.getElementById('inp_passphrase').value = pass ? pass[1] : '';
+    } else {
+        protoEl.value = /^srt:\/\//.test(url) ? 'srt_caller' : 'rtsp';
+    }
 }
 
 function updateOutputFields() {
@@ -787,7 +828,7 @@ function openEditInput(channel) {
     document.getElementById('inp_edit_channel').value = channel;
     
     document.getElementById('inp_name').value = input.name;
-    document.getElementById('inp_ip').value = input.url;
+    fillInputFormFromUrl(input.url);
     const bufEl = document.getElementById('inp_buffer');
     if(bufEl) bufEl.value = input.buffer || 0;
     document.getElementById('inp_latency').value = input.latency_ms || 0;
@@ -795,7 +836,7 @@ function openEditInput(channel) {
     updateInputFields();
     
     // Changing Modal Header
-    document.querySelector('#inputModal .modal-header h3').innerText = 'Editar Cámara RTSP';
+    document.querySelector('#inputModal .modal-header h3').innerText = 'Editar Entrada';
     openModal('inputModal');
 }
 
@@ -984,7 +1025,15 @@ function openEditOutput(id) {
 
 async function submitInput(e) {
     e.preventDefault();
-    let outUrl = document.getElementById('inp_ip').value || '';
+    let outUrl = (document.getElementById('inp_ip').value || '').trim();
+    if (document.getElementById('inp_protocol').value === 'srt_listener') {
+        const port = parseInt(document.getElementById('inp_listen_port').value, 10);
+        const pass = document.getElementById('inp_passphrase').value.trim();
+        if (!port || port < 1024 || port > 65535) { alert('Puerto de escucha no válido (1024–65535)'); return; }
+        // FFmpeg no decodifica la URL SRT: la clave va tal cual, así que no puede llevar separadores de URL
+        if (pass && !/^[^&?#=%\s]{10,79}$/.test(pass)) { alert('La passphrase debe tener entre 10 y 79 caracteres, sin espacios ni & ? # = %'); return; }
+        outUrl = `srt://0.0.0.0:${port}?mode=listener&pkt_size=1316` + (pass ? `&passphrase=${pass}` : '');
+    }
 
     const data = {
         name: document.getElementById('inp_name').value,
@@ -994,17 +1043,24 @@ async function submitInput(e) {
     };
     
     const isEdit = document.getElementById('inp_is_edit').value === 'true';
+    let res;
     if(isEdit) {
         const cId = document.getElementById('inp_edit_channel').value;
-        await fetch(`/api/inputs/${cId}`, {
+        res = await fetch(`/api/inputs/${cId}`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
     } else {
-        await fetch('/api/inputs', {
+        res = await fetch('/api/inputs', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
         });
     }
-    
+    // Rechazo del servidor (p.ej. puerto SRT ya usado): avisar y dejar el formulario abierto para corregir
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'No se pudo guardar la entrada');
+        return;
+    }
+
     closeModal('inputModal');
     e.target.reset();
     document.getElementById('inp_is_edit').value = 'false';

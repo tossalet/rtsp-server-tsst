@@ -37,7 +37,7 @@
                     <h1 id="topbar-title">Streams Manager</h1>
                     <p id="topbar-subtitle">Live endpoints control panel</p>
                 </div>
-                <button class="btn-primary" id="btn-add-input" onclick="openModal('inputModal')">
+                <button class="btn-primary" id="btn-add-input" onclick="openAddInput()">
                     <i class="fa-solid fa-plus"></i> Add Input
                 </button>
             </header>
@@ -232,11 +232,28 @@
                     <input type="hidden" id="inp_is_edit" value="false">
                     <input type="hidden" id="inp_edit_channel" value="">
                 </div>
-                <input type="hidden" id="inp_protocol" value="rtsp">
-                <input type="hidden" id="inp_mode" value="">
+                <div class="form-group">
+                    <label>Tipo de fuente</label>
+                    <select id="inp_protocol" onchange="updateInputFields()" class="form-control">
+                        <option value="rtsp">RTSP (cámara, el servidor se conecta)</option>
+                        <option value="srt_listener">SRT Listener (el servidor espera al emisor)</option>
+                        <option value="srt_caller">SRT Caller (el servidor se conecta al emisor)</option>
+                    </select>
+                </div>
                 <div class="form-group" id="inp_ip_container">
                     <label id="inp_ip_label">URL RTSP de la Cámara</label>
                     <input type="text" id="inp_ip" placeholder="rtsp://admin:12345@192.168.1.100:554/cam/realmonitor..." required>
+                </div>
+                <div class="form-group row" id="inp_listener_container" style="display:none; flex-wrap:wrap;">
+                    <div class="half">
+                        <label>Puerto de escucha</label>
+                        <input type="number" id="inp_listen_port" min="1024" max="65535" placeholder="9000">
+                    </div>
+                    <div class="half">
+                        <label>Passphrase (opcional)</label>
+                        <input type="text" id="inp_passphrase" placeholder="10–79 caracteres" autocomplete="off">
+                    </div>
+                    <small style="flex-basis:100%; color:var(--text-muted); font-size:0.75rem; margin-top:-5px; display:block;">El emisor se conecta como <b>caller</b> a <code>srt://IP-DEL-SERVIDOR:PUERTO</code>. Cada listener necesita un puerto distinto.</small>
                 </div>
                 <div class="form-group row">
                     <div class="half">

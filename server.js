@@ -142,18 +142,22 @@ app.post('/api/inputs', (req, res) => {
     const params = [ url || '', name || 'Stream', provider || 'TodoStreaming', location || '', remote || '',
                      enabled !== false ? 1 : 0, buffer || 0, parseLatencyMs(req.body.latency_ms) || 0 ];
 
-    db.run(query, params, function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        const channelId = this.lastID;
-        res.status(201).json({ channel: channelId });
-        io.emit('db_update', { event: 'inputs_changed' });
+    checkPortConflict(url, null, (conflict) => {
+        if (conflict) return res.status(409).json({ error: conflict });
 
-        // If enabled, auto-start stream Manager
-        if (enabled !== false) {
-            db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], (err, row) => {
-                if (row) streamManager.startInput(row);
-            });
-        }
+        db.run(query, params, function(err) {
+            if (err) return res.status(500).json({ error: err.message });
+            const channelId = this.lastID;
+            res.status(201).json({ channel: channelId });
+            io.emit('db_update', { event: 'inputs_changed' });
+
+            // If enabled, auto-start stream Manager
+            if (enabled !== false) {
+                db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], (err, row) => {
+                    if (row) streamManager.startInput(row);
+                });
+            }
+        });
     });
 });
 
@@ -229,16 +233,20 @@ app.put('/api/inputs/:channel', (req, res) => {
     const { url, name, buffer } = req.body;
     const query = `UPDATE inputs SET url = ?, name = ?, buffer = ?, latency_ms = COALESCE(?, latency_ms) WHERE channel = ?`;
 
-    db.run(query, [url, name, buffer || 0, parseLatencyMs(req.body.latency_ms), channelId], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        const changes = this.changes;
+    checkPortConflict(url, -Number(channelId), (conflict) => {
+        if (conflict) return res.status(409).json({ error: conflict });
 
-        // Restart the process if it was running with new data (los outputs siguen suscritos al canal)
-        streamManager.stopInput(channelId);
-        db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], (err, row) => {
-            if (row && row.enabled) streamManager.startInput(row);
-            io.emit('db_update', { event: 'inputs_changed' });
-            res.json({ updated: changes });
+        db.run(query, [url, name, buffer || 0, parseLatencyMs(req.body.latency_ms), channelId], function(err) {
+            if (err) return res.status(500).json({ error: err.message });
+            const changes = this.changes;
+
+            // Restart the process if it was running with new data (los outputs siguen suscritos al canal)
+            streamManager.stopInput(channelId);
+            db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], (err, row) => {
+                if (row && row.enabled) streamManager.startInput(row);
+                io.emit('db_update', { event: 'inputs_changed' });
+                res.json({ updated: changes });
+            });
         });
     });
 });

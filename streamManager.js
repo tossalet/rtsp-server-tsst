@@ -28,6 +28,12 @@ const INPUT_STALL_MS = 20000;           // Sin datos de la cámara durante 20s -
 const RESTART_DELAY_MS = 5000;
 const OUTPUT_RESTART_MS = 2000;         // Listener SRT: reabrir rápido para que Race Control pueda reconectar
 const OUTPUT_FAIL_RESTART_MS = 10000;   // Si FFmpeg muere nada más arrancar (URL mala, puerto ocupado) no machacar
+const LISTENER_RESTART_MS = 1000;       // Input SRT listener: reabrir rápido para que el emisor pueda reconectar
+
+// Input SRT en modo listener: el servidor espera a que el emisor (vMix, codificador...) se conecte
+function isSrtListener(url) {
+    return typeof url === 'string' && url.startsWith('srt://') && /[?&]mode=listener/.test(url);
+}
 
 // FFmpeg/libsrt espera latency, rcvlatency y peerlatency en MICROSEGUNDOS (por defecto 120ms).
 // Un valor < 1000 casi seguro se escribió pensando en ms (latency=200 serían 0.2ms -> pérdidas): se convierte.
@@ -122,6 +128,27 @@ function killGracefully(child) {
     setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 3000);
 }
 
+// Procesos parados que aún no han terminado de cerrarse. Al reiniciar (editar una entrada o salida) el FFmpeg nuevo
+// espera a que el viejo suelte el puerto: si no, el listener SRT nuevo no podía abrirlo y quedaba ~10 s sin señal.
+const exiting = { input: {}, output: {} };
+const pendingStart = { input: {}, output: {} };
+function trackExit(kind, key, child) {
+    exiting[kind][key] = child;
+    child.once('close', () => {
+        if (exiting[kind][key] !== child) return;
+        delete exiting[kind][key];
+        const obj = pendingStart[kind][key];
+        delete pendingStart[kind][key];
+        if (obj) (kind === 'input' ? startInput : startOutput)(obj);
+    });
+}
+// true si hay que esperar: el arranque se hará solo al cerrarse el proceso anterior
+function deferStart(kind, key, obj) {
+    if (!exiting[kind][key]) return false;
+    pendingStart[kind][key] = obj;
+    return true;
+}
+
 // Locate FFmpeg binary (handles Windows local download vs Linux global). Se resuelve una sola vez.
 let ffmpegPathCache = null;
 function getFFmpegPath() {
@@ -159,6 +186,7 @@ function startInput(inputObj) {
         return;
     }
     if (current && current.autoRestart) clearTimeout(current.autoRestart);
+    if (deferStart('input', channel, inputObj)) return true;
 
     const args = ['-hide_banner', '-nostdin', '-fflags', '+genpts'];
 
@@ -207,6 +235,8 @@ function startInput(inputObj) {
         inputObj,
         lastUpdate: Date.now(),
         lastData: Date.now(),
+        startedAt: Date.now(),
+        gotData: false,
         codec: current ? current.codec : '',
         intentionalStop: false,
         autoRestart: null,
@@ -219,6 +249,7 @@ function startInput(inputObj) {
     });
 
     child.stdout.on('data', (chunk) => {
+        state.gotData = true;
         state.lastData = Date.now();
         broadcast(channel, chunk);
     });
@@ -279,12 +310,16 @@ function startInput(inputObj) {
         if (state.intentionalStop) return;
 
         if (code !== 0) console.error(`[IN-${channel}] FFmpeg: ${maskCredentials(errTail.text()) || 'sin detalle'}`);
-        console.log(`[IN-${channel}] Connection lost or crashed. Auto-restarting in ${RESTART_DELAY_MS / 1000}s...`);
+        // Listener: si el emisor llegó a conectar, lo normal es que se haya ido y vuelva pronto; si murió
+        // nada más arrancar (puerto ocupado, URL mala) no machacar.
+        const listener = isSrtListener(url);
+        const restartMs = listener && Date.now() - state.startedAt > 5000 ? LISTENER_RESTART_MS : RESTART_DELAY_MS;
+        console.log(`[IN-${channel}] ${listener ? 'Emisor SRT desconectado' : 'Connection lost or crashed'}. Auto-restarting in ${restartMs / 1000}s...`);
         // Turn yellow in UI (we fake an active signal with 0 bitrate)
         if (ioInstance) ioInstance.emit('stats', { channel: channel, active: true, bitrate: '0.0kbits/s', time: '--:--:--' });
         state.autoRestart = setTimeout(() => {
             if (activeInputs[channel] === state) startInput(inputObj);
-        }, RESTART_DELAY_MS);
+        }, restartMs);
     });
 
     return true;
@@ -342,7 +377,11 @@ function stopInput(channel) {
     inp.intentionalStop = true;
     if (inp.autoRestart) clearTimeout(inp.autoRestart);
     stopPreview(channel); // antes la preview quedaba huérfana y su socket podía tumbar Node
-    if (inp.process) inp.process.kill('SIGKILL');
+    delete pendingStart.input[channel];
+    if (inp.process) {
+        trackExit('input', channel, inp.process);
+        inp.process.kill('SIGKILL');
+    }
     delete activeInputs[channel];
     delete telemetryCache[channel];
     fs.unlink(path.join(__dirname, 'public', 'thumbs', `thumb_${channel}.jpg`), () => {});
@@ -360,9 +399,10 @@ function startOutput(outputObj) {
         console.log(`Output ${id} is already running.`);
         return;
     }
+    if (deferStart('output', id, outputObj)) return true;
 
-    // Check if input stream is alive
-    if (!activeInputs[channel]) {
+    // Check if input stream is alive (o a punto de arrancar en cuanto se cierre su proceso anterior)
+    if (!activeInputs[channel] && !pendingStart.input[channel]) {
         console.log(`Cannot start Output ${id}: Input ${channel} is offline.`);
         return; // Will stay disabled until input connects
     }
@@ -533,9 +573,13 @@ function stopOutput(id) {
     console.log(`[STOPPING OUTPUT ${id}] Stopping process...`);
     outp.intentionalStop = true;
     if (outp.autoRestart) clearTimeout(outp.autoRestart);
-    if (outp.process) {
+    delete pendingStart.output[id];
+    if (outp.process && outp.process.exitCode === null) {
         unsubscribe(outp.parentChannel, outp.process.stdin);
-        killGracefully(outp.process);
+        trackExit('output', id, outp.process);
+        // Solo la grabación a disco necesita cierre limpio (trailer); SRT/UDP/RTMP se cortan al instante
+        if (outp.outputObj.url.startsWith('disk://')) killGracefully(outp.process);
+        else outp.process.kill('SIGKILL');
     }
     delete activeOutputs[id];
     delete telemetryCache['out_' + id];
@@ -555,7 +599,9 @@ setInterval(() => {
         const inp = activeInputs[channel];
 
         // Watchdog: cámara colgada sin cerrar la conexión -> FFmpeg bloqueado para siempre. Lo matamos y se reconecta.
-        if (inp.process && now - inp.lastData > INPUT_STALL_MS) {
+        // Un listener SRT sin emisor conectado no está colgado: simplemente espera.
+        const waitingForSender = isSrtListener(inp.inputObj.url) && !inp.gotData;
+        if (inp.process && !waitingForSender && now - inp.lastData > INPUT_STALL_MS) {
             console.log(`[IN-${channel}] Sin datos durante ${INPUT_STALL_MS / 1000}s. Forzando reconexión...`);
             inp.lastData = now;
             inp.process.kill('SIGKILL');

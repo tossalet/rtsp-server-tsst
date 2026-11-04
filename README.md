@@ -34,7 +34,18 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
 
 El instalador configura el mini PC como **servidor de hora (NTP)** de la red local, también sin internet.
 Con todas las cámaras sincronizadas con él, el reloj sobreimpreso (OSD) y los tiempos internos de todas coinciden.
-Todas las salidas SRT usan la misma latencia (200 ms desde el panel), así que el retardo de red es igual para todas.
+Conviene que todas las salidas SRT usen la misma latencia (500 ms por defecto), así el retardo de red es igual para todas.
+
+## Entradas SRT
+
+Además de cámaras RTSP, una entrada puede recibir una fuente **SRT** (y luego redistribuirla por sus salidas):
+
+- **SRT Listener**: el servidor abre un puerto y espera. El emisor se conecta como *caller* a `srt://IP-DEL-SERVIDOR:PUERTO`
+  (passphrase opcional: 10–79 caracteres, sin espacios ni `& ? # = %`, la misma en el emisor). Cada listener, entrada
+  o salida, necesita un puerto distinto (el panel lo rechaza si se repite).
+  Mientras no hay emisor no se reinicia. Si el emisor se corta, SRT lo detecta a los ~5 s y el puerto se reabre en 1 s;
+  el emisor (vMix, codificador) debe tener activada la reconexión automática.
+- **SRT Caller**: el servidor se conecta a `srt://IP-EMISOR:PUERTO[?streamid=...&passphrase=...]`.
 
 ## SRT
 
