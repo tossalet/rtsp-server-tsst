@@ -531,7 +531,8 @@ document.addEventListener('DOMContentLoaded', () => {
         thumbs.forEach(img => {
             const baseSrc = img.dataset.src;
             // Actualizar si el "Ojo" está activo, o si la imagen está trabada en las barras de color (para recuperar la foto inicial)
-            if (baseSrc && (img.classList.contains('preview-active') || img.src.includes('bars.svg'))) {
+            // Solo con señal: sin ella la miniatura no existe y cada 4 s salían dos 404 por cámara
+            if (baseSrc && img.classList.contains('has-signal') && (img.classList.contains('preview-active') || img.src.includes('bars.svg'))) {
                 const tempImg = new Image();
                 tempImg.onload = () => { img.src = tempImg.src; };
                 // Eliminamos el onerror que forzaba falsas barras rojas si coincidía que leíamos mientras ffmpeg guardaba
@@ -591,7 +592,7 @@ function renderStreams() {
                         <span id="codec-${input.channel}" class="badge-protocol udp" style="background:#4b5563;">H.26X</span>
                         <span class="stream-name" style="display:flex; flex-direction:column; line-height:1.2;">
                             ${input.name || 'Channel ' + input.channel}
-                            <span style="font-size:0.70rem; color:var(--accent-blue); font-family:monospace; font-weight:normal; user-select:all;">${input.url.replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
+                            <span style="font-size:0.70rem; color:var(--accent-blue); font-family:monospace; font-weight:normal; user-select:all;">${displayUrl(input.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
                         </span>
                     </div>
                     <div class="mid-section">
@@ -628,7 +629,7 @@ function renderStreams() {
                         </div>
                         <div style="font-size:0.85rem; color:var(--text-muted); line-height: 1.4; display:flex; flex-direction:column; gap:5px; min-width:0;">
                             <p><strong>URL Origen:</strong></p>
-                            <span style="color:#fff; font-weight:600; font-family:monospace; word-break: break-all;">${input.url}</span>
+                            <span style="color:#fff; font-weight:600; font-family:monospace; word-break: break-all;">${displayUrl(input.url)}</span>
                             <span style="font-size:0.75rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${input.latency_ms ? input.latency_ms + ' ms' : 'auto'}${input.buffer ? ' · Buffer ' + input.buffer + ' MB' : ''}</span>
                         </div>
                     </div>
@@ -640,8 +641,8 @@ function renderStreams() {
                                     <span class="tooltiptext">${out.enabled ? 'Enabled' : 'Disabled'}</span>
                                 </div>
                                 <span class="stream-name" style="display:flex; flex-direction:column; line-height:1.2;">
-                                    ${out.location || out.url.replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}
-                                    <span style="font-size:0.70rem; color:var(--text-muted); font-family:monospace; font-weight:normal; user-select:all;">${out.url.replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
+                                    ${out.location || displayUrl(out.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}
+                                    <span style="font-size:0.70rem; color:var(--text-muted); font-family:monospace; font-weight:normal; user-select:all;">${displayUrl(out.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
                                     ${out.url.startsWith('srt') ? `<span style="font-size:0.70rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${srtLatencyMs(out.url)} ms</span>` : ''}
                                 </span>
                             </div>
@@ -686,11 +687,24 @@ function toggleExpand(channel) {
 }
 
 // Modal Logic
+// Se muestra (display), se fuerza el cálculo de estilos y se añade .open para que la transición arranque.
+// (No requestAnimationFrame: se pausa con la pestaña en segundo plano y la ventana quedaba invisible tapando la página.)
+// Al cerrar se quita .open y se oculta al terminar; si se reabre antes, la transición se invierte sin saltos.
 function openModal(id) {
-    document.getElementById(id).style.display = 'flex';
+    const el = document.getElementById(id);
+    clearTimeout(el._hideTimer);
+    el.style.display = 'flex';
+    void el.offsetWidth;
+    el.classList.add('open');
+    const first = [...el.querySelectorAll('input:not([type="hidden"]):not([disabled]), select, textarea')]
+        .find(f => f.offsetParent !== null); // primer campo visible
+    if (first) first.focus({ preventScroll: true });
 }
 function closeModal(id) {
-    document.getElementById(id).style.display = 'none';
+    const el = document.getElementById(id);
+    el.classList.remove('open');
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => { if (!el.classList.contains('open')) el.style.display = 'none'; }, 260);
     if (id === 'previewModal') {
         const video = document.getElementById('previewVideo');
         if (video) {
@@ -700,6 +714,47 @@ function closeModal(id) {
         }
     }
 }
+// Esc cierra la ventana abierta
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const open = document.querySelector('.modal-overlay.open');
+    if (open) closeModal(open.id);
+});
+
+// Avisos no bloqueantes (sustituyen a alert). type: 'error' | 'success' | 'info'
+function toast(message, type = 'error', ms = 4500) {
+    let stack = document.getElementById('toast-stack');
+    if (!stack) {
+        stack = document.createElement('div');
+        stack.id = 'toast-stack';
+        stack.className = 'toast-stack';
+        stack.setAttribute('role', 'status');
+        stack.setAttribute('aria-live', 'polite');
+        document.body.appendChild(stack);
+    }
+    const icon = type === 'success' ? 'fa-circle-check' : type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-info';
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.innerHTML = `<i class="fa-solid ${icon}"></i><span></span>`;
+    el.querySelector('span').textContent = message;
+    stack.appendChild(el);
+    void el.offsetWidth;
+    el.classList.add('show');
+    const dismiss = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 280); };
+    el.addEventListener('click', dismiss);
+    setTimeout(dismiss, ms);
+}
+
+// Borde de scroll en la cabecera fija: solo cuando hay contenido pasando por debajo
+document.addEventListener('DOMContentLoaded', () => {
+    const main = document.querySelector('.main-content');
+    const bar = document.querySelector('.topbar');
+    if (!main || !bar) return;
+    const update = () => bar.classList.toggle('scrolled', main.scrollTop > 4);
+    main.addEventListener('scroll', update, { passive: true });
+    update();
+});
+
 function openOutputModal(channel) {
     document.getElementById('out_channel').value = channel;
     document.getElementById('out_is_edit').value = 'false';
@@ -935,7 +990,7 @@ async function deleteFile(urlPath) {
                 body: JSON.stringify({ filepath: urlPath })
             });
             fetchFiles();
-        } catch(e) { alert("Error deleting."); }
+        } catch(e) { toast("No se pudo borrar el fichero"); }
     }
 }
 
@@ -950,6 +1005,14 @@ function previewFile(url, fname) {
 // Ensure video stops when modal is closed
 
 
+
+// URL para mostrar en pantalla: oculta usuario:contraseña de la cámara y la passphrase SRT
+// (el editor sigue mostrando la URL completa para poder cambiarla)
+function displayUrl(url) {
+    return String(url || '')
+        .replace(/(\w+:\/\/)[^\s\/]*@/, '$1***@') // codicioso: hasta la última @ (claves con @)
+        .replace(/(passphrase=)[^&]+/, '$1***');
+}
 
 // Latencia efectiva en ms de una URL SRT (la URL guarda µs; sin latency el servidor aplica 500 ms)
 function srtLatencyMs(url) {
@@ -1029,9 +1092,9 @@ async function submitInput(e) {
     if (document.getElementById('inp_protocol').value === 'srt_listener') {
         const port = parseInt(document.getElementById('inp_listen_port').value, 10);
         const pass = document.getElementById('inp_passphrase').value.trim();
-        if (!port || port < 1024 || port > 65535) { alert('Puerto de escucha no válido (1024–65535)'); return; }
+        if (!port || port < 1024 || port > 65535) { toast('Puerto de escucha no válido (1024–65535)'); return; }
         // FFmpeg no decodifica la URL SRT: la clave va tal cual, así que no puede llevar separadores de URL
-        if (pass && !/^[^&?#=%\s]{10,79}$/.test(pass)) { alert('La passphrase debe tener entre 10 y 79 caracteres, sin espacios ni & ? # = %'); return; }
+        if (pass && !/^[^&?#=%\s]{10,79}$/.test(pass)) { toast('La passphrase debe tener entre 10 y 79 caracteres, sin espacios ni & ? # = %'); return; }
         outUrl = `srt://0.0.0.0:${port}?mode=listener&pkt_size=1316` + (pass ? `&passphrase=${pass}` : '');
     }
 
@@ -1057,11 +1120,12 @@ async function submitInput(e) {
     // Rechazo del servidor (p.ej. puerto SRT ya usado): avisar y dejar el formulario abierto para corregir
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err.error || 'No se pudo guardar la entrada');
+        toast(err.error || 'No se pudo guardar la entrada');
         return;
     }
 
     closeModal('inputModal');
+    toast(isEdit ? 'Entrada actualizada' : 'Entrada creada', 'success', 2500);
     e.target.reset();
     document.getElementById('inp_is_edit').value = 'false';
     document.querySelector('#inputModal .modal-header h3').innerText = 'Add New Input Stream';
@@ -1084,7 +1148,7 @@ async function submitOutput(e) {
     } else if (proto === 'rtmp') {
         const ip = document.getElementById('out_ip').value;
         const key = document.getElementById('out_port').value;
-        if(!ip || !key) { alert('Rellene la IP y la Clave para RTMP'); return; }
+        if(!ip || !key) { toast('Rellene la IP y la Clave para RTMP'); return; }
         outUrl = ip.endsWith('/') ? `${ip}${key}` : `${ip}/${key}`;
     } else if (proto === 'rtmp_local') {
         const key = document.getElementById('out_port').value || 'streaming_final';
@@ -1092,14 +1156,14 @@ async function submitOutput(e) {
     } else if (proto === 'srt') {
         const mode = document.getElementById('out_mode').value;
         const ip = (mode === 'listener') ? '0.0.0.0' : document.getElementById('out_ip').value;
-        if(!port) { alert('El puerto es obligatorio'); return; }
+        if(!port) { toast('El puerto es obligatorio'); return; }
         // pkt_size=1316 (7 paquetes TS, estándar MTU) y latency en µs (FFmpeg/libsrt) desde el selector en ms
         const latencyMs = Math.min(10000, Math.max(20, parseInt(document.getElementById('out_latency').value) || 500));
         const extra = document.getElementById('out_srt_extra').value;
         outUrl = `srt://${ip}:${port}?mode=${mode}&pkt_size=1316&latency=${latencyMs * 1000}${extra ? '&' + extra : ''}`;
     } else {
         const ip = document.getElementById('out_ip').value || '127.0.0.1';
-        if(!port) { alert('El puerto es obligatorio'); return; }
+        if(!port) { toast('El puerto es obligatorio'); return; }
         outUrl = `udp://${ip}:${port}`;
     }
 
@@ -1125,11 +1189,12 @@ async function submitOutput(e) {
     // Si el servidor rechaza (p.ej. puerto SRT ya usado) avisar y dejar el formulario abierto para corregir
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err.error || 'No se pudo guardar la salida');
+        toast(err.error || 'No se pudo guardar la salida');
         return;
     }
 
     closeModal('outputModal');
+    toast(isEdit ? 'Salida actualizada' : 'Salida creada', 'success', 2500);
     e.target.reset();
     document.getElementById('out_is_edit').value = 'false';
     document.querySelector('#outputModal .modal-header h3').innerText = 'Add Output';
@@ -1189,7 +1254,7 @@ async function savePorts(e) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
         });
-        alert('Configuración de Puertos UDP Actualizada.');
+        toast('Configuración de puertos actualizada', 'success');
     } catch(e) { console.error(e); }
 }
 
@@ -1212,7 +1277,7 @@ async function submitUser(e) {
             fetchSettingsData();
         } else {
             const err = await res.json();
-            alert('Error al crear usuario: ' + err.error);
+            toast('Error al crear usuario: ' + err.error);
         }
     } catch(e) { console.error(e); }
 }

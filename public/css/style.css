@@ -17,6 +17,10 @@
     --font-body: 'Inter', sans-serif;
     
     --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Interacción: rápida y solo en propiedades baratas (transform/opacity/color). "all 0.3s" se sentía lento */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --t-press: 100ms;
+    --t-ui: 180ms;
 }
 
 * {
@@ -36,9 +40,20 @@ body {
         radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.08) 0%, transparent 50%);
 }
 
-/* Typography */
+/* Typography: tracking según tamaño (titulares grandes más apretados) */
 h1, h2, h3 { font-family: var(--font-heading); }
+h1 { letter-spacing: -0.02em; line-height: 1.1; }
+h2, h3 { letter-spacing: -0.01em; }
 .monospaced { font-family: monospace; font-size: 1.1em; letter-spacing: 0.5px;}
+/* Cifras de ancho fijo: el bitrate y los tiempos cambian varias veces por segundo y, con cifras proporcionales,
+   la fila "bailaba" a cada actualización */
+.monospaced, .stat-item, .sys-number, .sys-value, .sys-sc-value, [id^="bitrate-"], [id^="time-"] {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Foco visible solo con teclado */
+:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; border-radius: 6px; }
+button:focus:not(:focus-visible) { outline: none; }
 
 /* Layout */
 .dashboard-wrapper {
@@ -91,9 +106,10 @@ h1, h2, h3 { font-family: var(--font-heading); }
     color: var(--text-muted);
     text-decoration: none;
     border-radius: 8px;
-    transition: var(--transition);
+    transition: background-color var(--t-ui) ease, color var(--t-ui) ease;
     font-weight: 500;
 }
+.nav-item:active { transform: scale(0.98); }
 
 .nav-item:hover, .nav-item.active {
     background: rgba(59, 130, 246, 0.1);
@@ -122,10 +138,16 @@ h1, h2, h3 { font-family: var(--font-heading); }
     z-index: 50;
     margin: -2rem -3rem 2rem;
     padding: 1.5rem 3rem 1.25rem;
-    background: rgba(11, 15, 25, 0.92);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--panel-border);
+    background: rgba(11, 15, 25, 0.82);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--t-ui) ease, box-shadow var(--t-ui) ease;
+}
+/* Borde de scroll: la separación solo aparece cuando hay contenido pasando por debajo */
+.topbar.scrolled {
+    border-bottom-color: var(--panel-border);
+    box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.6);
 }
 
 .page-title h1 {
@@ -135,7 +157,16 @@ h1, h2, h3 { font-family: var(--font-heading); }
 .page-title p { color: var(--text-muted); }
 
 /* Buttons */
-button { cursor: pointer; border: none; font-family: var(--font-body); transition: var(--transition); }
+button {
+    cursor: pointer; border: none; font-family: var(--font-body);
+    transition: background-color var(--t-ui) ease, color var(--t-ui) ease, border-color var(--t-ui) ease,
+                box-shadow var(--t-ui) ease, transform var(--t-ui) var(--ease-out);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation; /* sin retardo de 300 ms en pantallas táctiles */
+}
+/* Respuesta al presionar, no al soltar */
+button:active:not(:disabled) { transform: scale(0.97); transition-duration: var(--t-press); }
+.btn-primary:active:not(:disabled) { transform: scale(0.97); }
 .btn-primary {
     background: var(--accent-blue);
     color: white;
@@ -148,10 +179,7 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
     gap: 8px;
     box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
 }
-.btn-primary:hover {
-    background: var(--accent-blue-hover);
-    transform: translateY(-2px);
-}
+.btn-primary:hover { background: var(--accent-blue-hover); }
 .btn-secondary {
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-main);
@@ -193,7 +221,7 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
     border-radius: 12px;
     margin-bottom: 1.5rem;
     overflow: hidden;
-    transition: var(--transition);
+    transition: border-color var(--t-ui) ease, box-shadow var(--t-ui) ease;
 }
 .stream-card:hover { border-color: rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
 
@@ -238,7 +266,8 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
 .control-actions { display: flex; gap: 8px; align-items: center; }
 
 /* Status LED */
-.connection-led { width: 16px; min-width: 16px; height: 16px; min-height: 16px; aspect-ratio: 1; border-radius: 50%; background: #333; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; }
+.connection-led { width: 16px; min-width: 16px; height: 16px; min-height: 16px; aspect-ratio: 1; border-radius: 50%; background: #333; display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0;
+    transition: background-color 250ms ease, box-shadow 250ms ease; /* cambio de estado suave, sin parpadeo */ }
 .connection-led i { font-size: 8px; color: rgba(255,255,255,0.2); }
 .connection-led.active { background: var(--color-green); box-shadow: 0 0 12px var(--color-green); }
 .connection-led.error { background: var(--color-red); box-shadow: 0 0 12px var(--color-red); }
@@ -303,17 +332,24 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
 .status-badge .dot { width: 6px; height: 6px; background: var(--color-green); border-radius: 50%; box-shadow: 0 0 5px var(--color-green); }
 
 /* Modals */
+/* Ventanas: el fondo se oscurece y desenfoca para centrar la atención; la ventana se "materializa"
+   (escala + opacidad) y sale por el mismo camino. Con transiciones (no @keyframes) para poder
+   interrumpirlas: si se reabre a mitad de cierre, invierte desde donde está, sin saltos. */
 .modal-overlay {
     display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000;
+    background: rgba(0, 0, 0, 0); backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); z-index: 1000;
     align-items: center; justify-content: center;
+    transition: background-color 220ms ease, backdrop-filter 220ms ease, -webkit-backdrop-filter 220ms ease;
 }
+.modal-overlay.open { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .modal {
-    background: #1e293b; border: 1px solid var(--panel-border); border-radius: 12px;
-    width: 450px; max-width: 90%; padding: 2rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    animation: modalPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    background: rgba(30, 41, 59, 0.96); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px;
+    width: 450px; max-width: 90%; max-height: calc(100vh - 2rem); overflow-y: auto;
+    padding: 2rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    opacity: 0; transform: translateY(8px) scale(0.97);
+    transition: opacity 200ms ease, transform 260ms var(--ease-out);
 }
-@keyframes modalPop { 0% { transform: scale(0.9); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+.modal-overlay.open .modal { opacity: 1; transform: none; }
 
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
 .modal-header h3 { font-size: 1.25rem; font-weight: 600; text-transform: uppercase;}
@@ -338,10 +374,48 @@ button { cursor: pointer; border: none; font-family: var(--font-body); transitio
 .switch-container { display: flex; flex-direction: column; align-items: flex-start; }
 .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
 .switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 34px; }
-.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: background-color 200ms ease; border-radius: 34px; }
+.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: transform 240ms var(--ease-out); border-radius: 50%; }
 input:checked + .slider { background-color: var(--color-green); }
 input:checked + .slider:before { transform: translateX(18px); }
+
+/* Avisos no bloqueantes (sustituyen a alert): aparecen desde abajo y vuelven por donde vinieron */
+.toast-stack {
+    position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 2000;
+    display: flex; flex-direction: column; gap: 10px; align-items: flex-end; pointer-events: none;
+}
+.toast {
+    pointer-events: auto; max-width: 380px; display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px 14px; border-radius: 12px; font-size: 0.9rem; line-height: 1.4; color: var(--text-main);
+    background: rgba(30, 41, 59, 0.88); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.1); border-left: 3px solid var(--accent-blue);
+    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.6);
+    opacity: 0; transform: translateY(12px) scale(0.98);
+    transition: opacity 200ms ease, transform 260ms var(--ease-out);
+}
+.toast.show { opacity: 1; transform: none; }
+.toast.error { border-left-color: var(--color-red); }
+.toast.success { border-left-color: var(--color-green); }
+.toast i { margin-top: 2px; }
+.toast.error i { color: var(--color-red); }
+.toast.success i { color: var(--color-green); }
+
+/* Accesibilidad: preferencias del sistema */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    .modal, .toast { transform: none !important; }
+    button:active:not(:disabled) { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+    .sidebar, .topbar, .stream-card, .toast, .modal { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+    .topbar { background: var(--bg-color); }
+    .sidebar, .stream-card { background: #161c2d; }
+    .modal, .toast { background: #1e293b; }
+}
+@media (prefers-contrast: more) {
+    :root { --panel-border: rgba(255, 255, 255, 0.3); --text-muted: #cbd5e1; }
+    .stream-card, .modal, .sys-card { border-color: rgba(255, 255, 255, 0.35); }
+}
 
 /* Responsive & Adaptative Overrides */
 .left-section, .mid-section, .right-section, .left-section.sub { min-width: 0; }
@@ -383,4 +457,6 @@ input:checked + .slider:before { transform: translateX(18px); }
     .topbar .btn-primary { padding: 8px 12px; font-size: 0.85rem; white-space: nowrap; }
     .page-title h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
     .form-group.row { flex-direction: column; }
+    .toast-stack { left: 1rem; right: 1rem; bottom: 1rem; align-items: stretch; }
+    .toast { max-width: none; }
 }
