@@ -84,9 +84,10 @@ function renderDashboardStreams() {
 function switchTab(tabId) {
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     document.getElementById('nav-' + tabId).classList.add('active');
+    document.getElementById('view-toggle').hidden = tabId !== 'streams';
 
     if (tabId === 'streams') {
-        document.getElementById('streamsContainer').style.display = 'block';
+        document.getElementById('streamsContainer').style.display = ''; // filas o mosaico, según su clase
         document.getElementById('analyticsContainer').style.display = 'none';
         document.getElementById('systemContainer').style.display = 'none';
         document.getElementById('settingsContainer').style.display = 'none';
@@ -137,6 +138,7 @@ function switchTab(tabId) {
         
         fetchStorage();
     }
+    syncThumbPlayers(); // al salir de Streams se paran los vídeos en vivo
 }
 
 function initChart() {
@@ -322,20 +324,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
                 
-                // Buscar el botón justo al lado y actualizar su icono
-                const btn = img.nextElementSibling;
-                if (btn && btn.tagName === 'BUTTON') {
+                // Botón del ojo de esta miniatura (el vídeo en vivo puede quedar entre la imagen y el botón)
+                const btn = img.parentElement.querySelector('button');
+                if (btn) {
                     btn.style.color = data.preview_enabled ? 'var(--color-green)' : '#fff';
                     btn.title = data.preview_enabled ? 'Desactivar Previsualización (Ahorro CPU)' : 'Activar Previsualización';
                     btn.innerHTML = `<i class="fa-solid ${data.preview_enabled ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
                 }
             }
+            syncThumbPlayers(); // ojo encendido -> vídeo en vivo; apagado -> se para
             return; // Salir! No hacemos fetchData ni repintamos todo el DOM.
         }
         if (data.event === 'input_toggled') {
             const inp = inputs.find(i => i.channel == data.channel);
             if (inp) inp.enabled = data.enabled;
-            
+            syncThumbPlayers();
+
             // LED
             const led = document.getElementById(`led-${data.channel}`);
             if (led) {
@@ -467,6 +471,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTelemetryChart();
             }
         }
+        // Minigráfico y barra: verde con señal, amarillo esperando
+        const key = data.channel.toString();
+        const svg = document.querySelector(`svg.spark[data-key="${key}"]`);
+        if (svg) drawSpark(svg, (frontendTelemetryCache[key] || []).map(p => p.y || 0));
+        const qbar = document.getElementById(`qbar-${key}`);
+        if (qbar && data.active) qbar.className = `fill ${parseFloat(data.bitrate) > 0 ? 'green' : 'yellow'}`;
         // Render streams list locally on dash
         renderDashboardStreams();
     });
@@ -602,7 +612,8 @@ function renderStreams() {
                         <div class="stat-item ${!input.enabled ? 'disabled' : ''}">
                             <i class="fa-solid fa-gauge-high"></i> <span class="monospaced" id="bitrate-${input.channel}">-- Mbps</span>
                         </div>
-                        <div class="quality-bar">
+                        <div class="quality-bar" title="Bitrate del último minuto">
+                            <svg class="spark" data-key="${input.channel}" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><path class="spark-area"/><path class="spark-line"/></svg>
                             <div class="fill ${input.enabled ? 'yellow' : 'red'}" id="qbar-${input.channel}" style="width: ${input.enabled ? '100%' : '0%'}"></div>
                         </div>
                     </div>
@@ -621,7 +632,7 @@ function renderStreams() {
                 
                 <div class="stream-outputs" id="outputs-container-${input.channel}">
                     <div class="thumb-container" style="padding: 1rem 1.5rem; background: rgba(0,0,0,0.3); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; gap: 20px; align-items: center;">
-                        <div style="position:relative; width:160px; height:90px; flex-shrink:0; border-radius:6px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                        <div class="thumb-box" id="thumb-box-${input.channel}" style="position:relative; width:160px; height:90px; flex-shrink:0; border-radius:6px; overflow:hidden; border:1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
                             <img id="thumb-img-${input.channel}" class="${input.preview_enabled && input.enabled ? 'preview-active' : ''}" data-src="/thumbs/thumb_${input.channel}.jpg" src="${input.enabled ? '/thumbs/thumb_' + input.channel + '.jpg' + (input.preview_enabled ? '?t=' + Date.now() : '') : '/images/bars.svg'}" onerror="if(!this.src.includes('bars.svg')){this.src='/images/bars.svg';}" style="width:100%; height:100%; object-fit:cover; filter: ${input.preview_enabled && input.enabled ? 'none' : 'grayscale(100%) opacity(40%) blur(1px)'}; transition: filter 0.3s;" />
                             <button onclick="togglePreview(${input.channel})" class="action-btn" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.6); padding:8px 12px; border:none; color:${input.preview_enabled ? 'var(--color-green)' : '#fff'}; border-radius:4px; font-size:1.2rem; cursor:pointer; opacity: 0.8; transition:0.2s;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.8" title="${input.preview_enabled ? 'Desactivar Previsualización (Ahorro CPU)' : 'Activar Previsualización'}">
                                 <i class="fa-solid ${input.preview_enabled ? 'fa-eye' : 'fa-eye-slash'}"></i>
@@ -654,6 +665,7 @@ function renderStreams() {
                                     <i class="fa-solid fa-gauge-high"></i> <span class="monospaced" id="bitrate-out_${out.id}">-- Mbps</span>
                                 </div>
                                 <div class="quality-bar">
+                                    <svg class="spark" data-key="out_${out.id}" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><path class="spark-area"/><path class="spark-line"/></svg>
                                     <div class="fill ${out.enabled ? 'yellow' : 'red'}" id="qbar-out_${out.id}" style="width: ${out.enabled ? '100%' : '0%'}"></div>
                                 </div>
                             </div>
@@ -673,6 +685,9 @@ function renderStreams() {
         `;
         container.innerHTML += inputHTML;
     });
+    // Al reconstruir las tarjetas: redibujar los minigráficos y recolocar los vídeos en vivo sin cortarlos
+    container.querySelectorAll("svg.spark").forEach(svg => drawSpark(svg, (frontendTelemetryCache[svg.dataset.key] || []).map(p => p.y || 0)));
+    syncThumbPlayers();
 }
 
 function toggleExpand(channel) {
@@ -684,7 +699,131 @@ function toggleExpand(channel) {
     } else {
         icon.className = 'fa-solid fa-chevron-right';
     }
+    syncThumbPlayers();
 }
+
+/* =======================================
+ *  MINIGRÁFICO DE BITRATE (último minuto, con los datos que ya manda el servidor)
+ * ======================================= */
+const SPARK_POINTS = 60;
+function drawSpark(svg, buf) {
+    const line = svg.querySelector('.spark-line');
+    const area = svg.querySelector('.spark-area');
+    buf = buf.slice(-SPARK_POINTS);
+    if (buf.length < 2) { line.setAttribute('d', ''); area.setAttribute('d', ''); return; }
+    const max = Math.max(...buf, 1) * 1.15;
+    const step = 120 / (SPARK_POINTS - 1);
+    const x0 = 120 - (buf.length - 1) * step; // los datos entran por la derecha
+    const d = buf.map((v, i) => `${i ? 'L' : 'M'}${(x0 + i * step).toFixed(1)} ${(27 - (v / max) * 25).toFixed(1)}`).join(' ');
+    line.setAttribute('d', d);
+    area.setAttribute('d', `${d} L120 28 L${x0.toFixed(1)} 28 Z`);
+}
+
+/* =======================================
+ *  VÍDEO EN VIVO EN LA TARJETA (HLS bajo demanda)
+ * =======================================
+ * Con el ojo encendido y la miniatura a la vista (tarjeta desplegada o mosaico), el vídeo se
+ * reproduce sin sonido encima de la imagen fija. El servidor solo copia el vídeo (sin recodificar)
+ * mientras alguien lo mira y lo para a los 15 s. Los <video> viven fuera del HTML de las tarjetas:
+ * renderStreams() las reconstruye y syncThumbPlayers() los recoloca sin cortarlos.
+ */
+const thumbPlayers = {}; // canal -> { video, hls, retry }
+
+function wantsThumbLive(input) {
+    if (document.hidden || !input.preview_enabled || !input.enabled) return false;
+    const card = document.getElementById(`input-card-${input.channel}`);
+    if (!card || card.offsetParent === null) return false; // pestaña Streams no visible
+    const grid = document.getElementById('streamsContainer').classList.contains('view-grid');
+    return grid || card.classList.contains('expand-mode');
+}
+
+function syncThumbPlayers() {
+    const wanted = new Set();
+    for (const input of inputs) {
+        const channel = String(input.channel);
+        const box = document.getElementById(`thumb-box-${channel}`);
+        if (!box || !wantsThumbLive(input)) continue;
+        wanted.add(channel);
+        const p = thumbPlayers[channel] || startThumbPlayer(channel);
+        if (p.video.parentNode !== box) {
+            box.insertBefore(p.video, box.querySelector('button')); // debajo del botón del ojo
+            p.video.play().catch(() => {}); // sacarlo del DOM lo pausa
+        }
+    }
+    for (const channel of Object.keys(thumbPlayers)) if (!wanted.has(channel)) stopThumbPlayer(channel);
+}
+
+function startThumbPlayer(channel) {
+    const video = document.createElement('video');
+    video.className = 'live-thumb';
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.onplaying = () => video.classList.add('playing');
+    const p = { video, hls: null, retry: null };
+    thumbPlayers[channel] = p;
+    loadThumbPlayer(p, channel);
+    return p;
+}
+
+function loadThumbPlayer(p, channel) {
+    const src = `/hls/${channel}/index.m3u8`;
+    if (window.Hls && Hls.isSupported()) {
+        p.hls = new Hls({ liveSyncDurationCount: 2, manifestLoadingMaxRetry: 6, manifestLoadingRetryDelay: 1000 });
+        p.hls.on(Hls.Events.MANIFEST_PARSED, () => p.video.play().catch(() => {}));
+        p.hls.on(Hls.Events.ERROR, (e, data) => {
+            if (!data.fatal) return;
+            // Sin señal o códec que el navegador no reproduce (H.265): queda la imagen fija y se reintenta
+            p.hls.destroy();
+            p.hls = null;
+            p.video.classList.remove('playing');
+            p.retry = setTimeout(() => { p.retry = null; if (thumbPlayers[channel] === p) loadThumbPlayer(p, channel); }, 10000);
+        });
+        p.hls.loadSource(src);
+        p.hls.attachMedia(p.video);
+    } else if (p.video.canPlayType('application/vnd.apple.mpegurl')) {
+        p.video.src = src; // Safari: HLS nativo
+    }
+}
+
+function stopThumbPlayer(channel) {
+    const p = thumbPlayers[channel];
+    if (!p) return;
+    delete thumbPlayers[channel];
+    clearTimeout(p.retry);
+    if (p.hls) p.hls.destroy();
+    p.video.pause();
+    p.video.removeAttribute('src');
+    p.video.load();
+    p.video.remove();
+}
+
+// Pestaña del navegador oculta: se paran los vídeos (el servidor apaga el HLS a los 15 s)
+document.addEventListener('visibilitychange', syncThumbPlayers);
+
+/* =======================================
+ *  VISTA DE STREAMS: FILAS O MOSAICO (se recuerda en este navegador)
+ * ======================================= */
+function setStreamsView(mode) {
+    if (mode !== 'grid') mode = 'list';
+    document.getElementById('streamsContainer').classList.toggle('view-grid', mode === 'grid');
+    document.querySelectorAll('#view-toggle button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === mode)));
+    try { localStorage.setItem('streamsView', mode); } catch (e) {}
+    syncThumbPlayers();
+}
+document.addEventListener('DOMContentLoaded', () => {
+    let mode = 'list';
+    try { mode = localStorage.getItem('streamsView') || 'list'; } catch (e) {}
+    setStreamsView(mode);
+
+    // Enlace a Grafana solo si está instalado (mismo equipo, su propio puerto)
+    fetch('/api/status').then(r => r.json()).then(s => {
+        if (!s.grafanaPort) return;
+        const a = document.getElementById('nav-grafana');
+        a.href = `${location.protocol}//${location.hostname}:${s.grafanaPort}/`;
+        a.hidden = false;
+    }).catch(() => {});
+});
 
 // Modal Logic
 // Se muestra (display), se fuerza el cálculo de estilos y se añade .open para que la transición arranque.

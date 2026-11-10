@@ -27,6 +27,8 @@
                 <a href="#" class="nav-item" id="nav-analytics" onclick="switchTab('analytics')"><i class="fa-solid fa-chart-line"></i> Analytics</a>
                 <a href="#" class="nav-item" id="nav-storage" onclick="switchTab('storage')"><i class="fa-solid fa-hard-drive"></i> Storage</a>
                 <a href="#" class="nav-item" id="nav-settings" onclick="switchTab('settings')"><i class="fa-solid fa-gear"></i> Settings</a>
+                <!-- Solo aparece si el instalador puso Prometheus + Grafana (opcional) -->
+                <a href="#" class="nav-item" id="nav-grafana" target="_blank" rel="noopener" hidden><i class="fa-solid fa-chart-area"></i> Grafana <i class="fa-solid fa-arrow-up-right-from-square" style="font-size:0.7em; opacity:0.6;"></i></a>
             </nav>
         </aside>
 
@@ -37,9 +39,15 @@
                     <h1 id="topbar-title">Streams Manager</h1>
                     <p id="topbar-subtitle">Live endpoints control panel</p>
                 </div>
-                <button class="btn-primary" id="btn-add-input" onclick="openAddInput()">
-                    <i class="fa-solid fa-plus"></i> Add Input
-                </button>
+                <div class="topbar-actions">
+                    <div class="view-toggle" id="view-toggle" role="group" aria-label="Vista de las señales" hidden>
+                        <button type="button" data-view="list" aria-pressed="true" title="Filas" onclick="setStreamsView('list')"><i class="fa-solid fa-list"></i></button>
+                        <button type="button" data-view="grid" aria-pressed="false" title="Mosaico" onclick="setStreamsView('grid')"><i class="fa-solid fa-table-cells-large"></i></button>
+                    </div>
+                    <button class="btn-primary" id="btn-add-input" onclick="openAddInput()">
+                        <i class="fa-solid fa-plus"></i> Add Input
+                    </button>
+                </div>
             </header>
 
             <section class="streams-container" id="streamsContainer">
@@ -413,6 +421,7 @@
 
     <!-- Chart.js for visualization (Local) -->
     <script src="vendor/chart.js/chart.umd.js"></script>
+    <script src="vendor/hls.js/hls.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script src="js/app.js"></script>
 </body>

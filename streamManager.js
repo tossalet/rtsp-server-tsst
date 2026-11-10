@@ -10,6 +10,9 @@ function setIo(io) { ioInstance = io; }
 const activeInputs = {};
 const activeOutputs = {};
 const telemetryCache = {};
+// Contadores para /metrics (Prometheus). Se mantienen aunque el proceso se reinicie.
+const counters = { inputBytes: {}, inputRestarts: {}, outputRestarts: {} };
+const inputRate = {}; // canal -> bits/s medidos en Node (último segundo)
 
 // Distribución en memoria: cada canal tiene un "hub" (Set de stdin de FFmpeg).
 // El input escribe por stdout (pipe) y Node reparte los chunks a los stdin de outputs/preview.
@@ -251,6 +254,7 @@ function startInput(inputObj) {
     child.stdout.on('data', (chunk) => {
         state.gotData = true;
         state.lastData = Date.now();
+        counters.inputBytes[channel] = (counters.inputBytes[channel] || 0) + chunk.length;
         broadcast(channel, chunk);
     });
 
@@ -317,6 +321,7 @@ function startInput(inputObj) {
         console.log(`[IN-${channel}] ${listener ? 'Emisor SRT desconectado' : 'Connection lost or crashed'}. Auto-restarting in ${restartMs / 1000}s...`);
         // Turn yellow in UI (we fake an active signal with 0 bitrate)
         if (ioInstance) ioInstance.emit('stats', { channel: channel, active: true, bitrate: '0.0kbits/s', time: '--:--:--' });
+        counters.inputRestarts[channel] = (counters.inputRestarts[channel] || 0) + 1;
         state.autoRestart = setTimeout(() => {
             if (activeInputs[channel] === state) startInput(inputObj);
         }, restartMs);
@@ -367,6 +372,69 @@ function stopPreview(channel) {
     }
 }
 
+/* =======================================
+ *  HLS DEL PANEL (vídeo en vivo, bajo demanda)
+ * =======================================
+ * Pedir la lista .m3u8 arranca el HLS del canal (o lo mantiene vivo). Lo comparten todos los
+ * que miran ese canal y se para a los 15 s sin peticiones. -c copy: sin recodificar, CPU casi nula.
+ * Los trozos van a RAM (/dev/shm en Linux) para no desgastar el disco del mini PC.
+ */
+const HLS_DIR = (process.platform === 'linux' && fs.existsSync('/dev/shm'))
+    ? '/dev/shm/tsst-hls'
+    : path.join(os.tmpdir(), 'tsst-hls');
+const HLS_IDLE_MS = 15000;
+const hlsProcs = {}; // canal -> { proc, dir, at }
+try { fs.rmSync(HLS_DIR, { recursive: true, force: true }); } catch (e) {} // restos de un arranque anterior
+
+// Devuelve la carpeta de la lista, o null si el canal no está activo
+function ensureHls(channel) {
+    if (!activeInputs[channel]) return null;
+    let h = hlsProcs[channel];
+    if (h) { h.at = Date.now(); return h.dir; }
+
+    const dir = path.join(HLS_DIR, String(channel));
+    try { fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true }); } catch (e) { return null; }
+    const args = [
+        '-hide_banner', '-nostats', '-loglevel', 'error',
+        '-fflags', '+genpts', '-f', 'mpegts', '-i', 'pipe:0',
+        '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy',
+        // Con copy cada trozo empieza en un keyframe: dura lo que el GOP de la cámara aunque pidamos 1 s
+        '-f', 'hls', '-hls_time', '1', '-hls_list_size', '4',
+        '-hls_flags', 'delete_segments+omit_endlist+temp_file',
+        '-hls_segment_filename', path.join(dir, 'seg_%05d.ts'),
+        path.join(dir, 'index.m3u8')
+    ];
+    const child = spawn(getFFmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    h = hlsProcs[channel] = { proc: child, dir, at: Date.now() };
+    subscribe(channel, child.stdin, null); // solo visualización: si va tarde no se avisa
+    const errTail = makeStderrTail();
+    child.stderr.on('data', d => errTail.push(d.toString()));
+    child.on('error', () => {});
+    child.on('close', (code) => {
+        unsubscribe(channel, child.stdin);
+        if (hlsProcs[channel] !== h) return;
+        delete hlsProcs[channel]; // la siguiente petición de la lista lo vuelve a arrancar
+        if (code) console.log(`[HLS-${channel}] FFmpeg terminó (${code}). ${errTail.text()}`);
+    });
+    console.log(`[HLS-${channel}] Vídeo en vivo para el panel (copia, sin recodificar)`);
+    return dir;
+}
+
+function stopHls(channel) {
+    const h = hlsProcs[channel];
+    if (!h) return;
+    delete hlsProcs[channel];
+    unsubscribe(channel, h.proc.stdin);
+    h.proc.kill('SIGKILL');
+    fs.promises.rm(h.dir, { recursive: true, force: true }).catch(() => {});
+}
+
+// Nadie mira (ventana o pestaña cerrada): se para
+setInterval(() => {
+    const now = Date.now();
+    for (const channel in hlsProcs) if (now - hlsProcs[channel].at > HLS_IDLE_MS) stopHls(channel);
+}, 5000).unref();
+
 /**
  * Stop an Input Stream
  */
@@ -377,6 +445,7 @@ function stopInput(channel) {
     inp.intentionalStop = true;
     if (inp.autoRestart) clearTimeout(inp.autoRestart);
     stopPreview(channel); // antes la preview quedaba huérfana y su socket podía tumbar Node
+    stopHls(channel);
     delete pendingStart.input[channel];
     if (inp.process) {
         trackExit('input', channel, inp.process);
@@ -557,6 +626,7 @@ function startOutput(outputObj) {
         const delay = failedFast ? OUTPUT_FAIL_RESTART_MS : OUTPUT_RESTART_MS;
         if (failedFast) console.error(`[OUT-${id}] FFmpeg: ${maskCredentials(errTail.text()) || 'sin detalle'}`);
         console.log(`[OUT-${id}] Receptor desconectado o fallo. Reiniciando salida en ${delay / 1000}s...`);
+        counters.outputRestarts[id] = (counters.outputRestarts[id] || 0) + 1;
         state.autoRestart = setTimeout(() => {
             if (activeOutputs[id] !== state) return;
             delete activeOutputs[id];
@@ -593,8 +663,18 @@ function removeChannel(channel) {
 }
 
 // Global Heartbeat Monitor: detect frozen streams, push zero telemetry and kill stalled inputs
+let lastRateAt = Date.now();
+const lastBytes = {};
 setInterval(() => {
     const now = Date.now();
+    // Bitrate de entrada medido en Node (más fiable que el de FFmpeg y gratis: ya contamos los bytes)
+    const dt = (now - lastRateAt) / 1000;
+    lastRateAt = now;
+    for (const channel in counters.inputBytes) {
+        const b = counters.inputBytes[channel];
+        inputRate[channel] = dt > 0 ? ((b - (lastBytes[channel] || 0)) * 8) / dt : 0;
+        lastBytes[channel] = b;
+    }
     for (const channel in activeInputs) {
         const inp = activeInputs[channel];
 
@@ -652,8 +732,39 @@ function getTotalBitrates() {
     return { rx: (rx / 1000).toFixed(2), tx: (tx / 1000).toFixed(2) };
 }
 
+// Estado para /metrics. Solo se calcula cuando Prometheus lo pide.
+function getMetricsSnapshot() {
+    const lastKbps = key => { const h = telemetryCache[key]; return h && h.length ? h[h.length - 1].y || 0 : 0; };
+    const inputs = Object.keys(activeInputs).map(channel => {
+        const inp = activeInputs[channel];
+        return {
+            channel,
+            running: !!inp.process,
+            signal: !!inp.process && Date.now() - inp.lastData < 3000,
+            bitrateBps: inputRate[channel] || 0,
+            bytesTotal: counters.inputBytes[channel] || 0,
+            restarts: counters.inputRestarts[channel] || 0,
+            protocol: (inp.inputObj.url.match(/^(\w+):/) || [])[1] || 'otro',
+            hlsViewing: !!hlsProcs[channel]
+        };
+    });
+    const outputs = Object.keys(activeOutputs).map(id => {
+        const o = activeOutputs[id];
+        return {
+            id, channel: o.parentChannel,
+            running: !!o.process && o.process.exitCode === null,
+            bitrateBps: lastKbps('out_' + id) * 1000,
+            restarts: counters.outputRestarts[id] || 0,
+            protocol: (o.outputObj.url.match(/^(\w+):/) || [])[1] || 'otro',
+            vcodec: o.outputObj.vcodec || 'copy'
+        };
+    });
+    return { inputs, outputs, hlsActive: Object.keys(hlsProcs).length };
+}
+
 // Al parar el servicio (systemd/docker) cerrar los FFmpeg para no dejar procesos huérfanos
 function shutdown() {
+    for (const channel in hlsProcs) stopHls(channel);
     for (const id in activeOutputs) stopOutput(id);
     for (const channel in activeInputs) stopInput(channel);
     setTimeout(() => process.exit(0), 500);
@@ -671,6 +782,9 @@ module.exports = {
     stopPreview,
     removeChannel,
     getTotalBitrates,
+    getMetricsSnapshot,
+    ensureHls,
+    HLS_DIR,
     activeInputs,
     activeOutputs
 };

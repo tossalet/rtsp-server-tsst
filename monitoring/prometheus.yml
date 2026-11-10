@@ -1,0 +1,10 @@
+# Prometheus para el servidor TSST (RTSP -> SRT). Corre en el mismo mini PC: /metrics no necesita token.
+# El instalador lo copia a /etc/prometheus/prometheus.yml
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tsst
+    static_configs:
+      - targets: ['localhost:4000']

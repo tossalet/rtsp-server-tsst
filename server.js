@@ -87,9 +87,33 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Simple API status endpoint
+// Simple API status endpoint. grafanaPort: el instalador lo define si se instaló Prometheus + Grafana
 app.get('/api/status', (req, res) => {
-    res.json({ online: true, app: 'RTSP_SERVER_TSST', version: '1.0.0' });
+    res.json({ online: true, app: 'RTSP_SERVER_TSST', version: '1.0.0', grafanaPort: parseInt(process.env.GRAFANA_PORT, 10) || null });
+});
+
+// Métricas para Prometheus (solo desde el propio servidor)
+const metrics = require('./metrics');
+app.get('/metrics', metrics.authorize, metrics.handler);
+
+// Vídeo en vivo del panel: pedir la lista arranca (o mantiene vivo) el HLS del canal
+app.get('/hls/:channel/index.m3u8', async (req, res) => {
+    if (!/^\d+$/.test(req.params.channel)) return res.status(404).end();
+    const dir = streamManager.ensureHls(req.params.channel);
+    if (!dir) return res.status(404).end();
+    const file = path.join(dir, 'index.m3u8');
+    // La primera vez FFmpeg tarda un par de trozos en escribir la lista (con GOP largo, unos segundos)
+    for (let i = 0; i < 40 && !fs.existsSync(file); i++) await new Promise(r => setTimeout(r, 250));
+    res.set('Cache-Control', 'no-store');
+    res.type('application/vnd.apple.mpegurl');
+    res.sendFile(file, err => { if (err && !res.headersSent) res.status(504).end(); });
+});
+app.get('/hls/:channel/:segment', (req, res) => {
+    const { channel, segment } = req.params;
+    if (!/^\d+$/.test(channel) || !/^seg_\d+\.ts$/.test(segment)) return res.status(404).end();
+    res.set('Cache-Control', 'no-store');
+    res.type('video/mp2t');
+    res.sendFile(path.join(streamManager.HLS_DIR, channel, segment), err => { if (err && !res.headersSent) res.status(404).end(); });
 });
 
 app.get('/api/server-ip', (req, res) => {

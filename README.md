@@ -30,6 +30,30 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
 5. Cámaras en hora: en cada cámara, servidor NTP = IP del mini PC, puerto 123, zona `Europe/Madrid`.
    Comprobar con `chronyc clients` en el mini PC que aparecen las cámaras.
 
+## Visualización en el panel
+
+- **Filas o mosaico**: botones junto a "Add Input" (pestaña Streams). Cada navegador recuerda su elección.
+  En mosaico cada cámara es una tesela con la imagen siempre a la vista; las salidas aparecen al desplegarla.
+- **Minigráfico de bitrate** del último minuto en cada entrada y salida (verde con señal).
+- **Vídeo en vivo (HLS)**: con el ojo encendido y la miniatura a la vista (tarjeta desplegada o mosaico), se ve
+  el vídeo real sin sonido. El servidor solo **copia** el vídeo (sin recodificar: ~1 % de un núcleo y ~25 MB por
+  cámara mirada), guarda los trozos en RAM y lo apaga a los 15 s de que nadie mire. Si la cámara es H.265 y el
+  navegador no lo reproduce, se queda la imagen fija.
+
+## Gráficas con Grafana (opcional)
+
+```bash
+sudo bash /opt/race-control-server/instalar_servidor.sh --monitorizacion
+```
+
+Instala Prometheus (historial, 15 días como máximo) y Grafana en el puerto **4001**, con un panel ya preparado:
+señales con y sin señal, bitrate de entrada y salida, reconexiones, CPU, memoria y red del mini PC.
+Consumo aproximado: 200 MB de RAM y CPU casi nula. Ambos con prioridad baja: el vídeo siempre va primero.
+Una vez instalado aparece "Grafana" en el menú del panel, y las actualizaciones normales lo mantienen.
+
+Sin `--monitorizacion` no se instala nada: el servidor solo expone `/metrics` (formato Prometheus), que no
+consume nada si nadie lo pide y solo responde desde el propio mini PC (o con `METRICS_TOKEN` desde fuera).
+
 ## Sincronización de cámaras
 
 El instalador configura el mini PC como **servidor de hora (NTP)** de la red local, también sin internet.

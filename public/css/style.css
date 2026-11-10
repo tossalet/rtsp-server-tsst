@@ -379,6 +379,51 @@ button:active:not(:disabled) { transform: scale(0.97); transition-duration: var(
 input:checked + .slider { background-color: var(--color-green); }
 input:checked + .slider:before { transform: translateX(18px); }
 
+/* ---------- Selector de vista: filas o mosaico ---------- */
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.view-toggle { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border); }
+.view-toggle[hidden] { display: none; }
+.view-toggle button { width: 34px; height: 30px; border-radius: 7px; background: transparent; color: var(--text-muted); display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }
+.view-toggle button:hover { color: var(--text-main); }
+.view-toggle button[aria-pressed="true"] { background: rgba(255,255,255,0.1); color: var(--text-main); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+
+/* Mosaico: cada entrada es una tesela con su imagen siempre a la vista; las salidas, al desplegar */
+.streams-container.view-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 1rem; align-items: start; }
+.view-grid .stream-card { margin-bottom: 0; }
+.view-grid .stream-header, .view-grid .output-row { flex-direction: column; align-items: stretch; gap: 12px; padding: 1rem 1.1rem; }
+.view-grid .left-section, .view-grid .mid-section, .view-grid .right-section, .view-grid .left-section.sub { width: 100% !important; }
+.view-grid .left-section { flex-wrap: wrap; gap: 10px; }
+.view-grid .stream-header .stream-name { flex: 1 1 100%; order: 10; }
+.view-grid .left-section.sub { padding-left: 0; }
+.view-grid .right-section { justify-content: flex-end; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; }
+.view-grid .control-actions { flex-wrap: wrap; justify-content: flex-end; }
+.view-grid .stream-outputs { display: block; }
+.view-grid .stream-card:not(.expand-mode) .output-row { display: none; }
+.view-grid .thumb-container { flex-direction: column; align-items: stretch !important; gap: 10px !important; padding: 0.9rem 1.1rem !important; }
+.view-grid .thumb-box { width: 100% !important; height: auto !important; aspect-ratio: 16 / 9; }
+.view-grid .thumb-container > div:last-child > p { display: none; } /* "URL Origen:" no cabe en la tesela */
+@media (max-width: 768px) { .view-toggle { display: none; } }
+
+/* ---------- Minigráfico de bitrate (último minuto) ---------- */
+.quality-bar { height: 28px; border-radius: 6px; overflow: hidden; background: rgba(255,255,255,0.03); min-width: 80px; }
+.quality-bar .spark { position: absolute; inset: 0; width: 100%; height: 100%; }
+.spark-line { fill: none; stroke: var(--text-muted); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; opacity: 0.5; }
+.spark-area { fill: rgba(148, 163, 184, 0.08); }
+.quality-bar .fill { position: absolute; left: 0; bottom: 0; height: 2px; border-radius: 0; box-shadow: none !important; }
+.quality-bar:has(.fill.green) .spark-line { stroke: var(--color-green); opacity: 1; }
+.quality-bar:has(.fill.green) .spark-area { fill: rgba(16, 185, 129, 0.14); }
+
+/* ---------- Vídeo en vivo sobre la miniatura ---------- */
+.live-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; opacity: 0; transition: opacity 300ms ease; pointer-events: none; }
+.live-thumb.playing { opacity: 1; }
+.thumb-box:has(.live-thumb.playing)::after {
+    content: 'EN VIVO'; position: absolute; top: 6px; left: 6px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em;
+    padding: 2px 6px; border-radius: 4px; background: rgba(239, 68, 68, 0.9); color: #fff; pointer-events: none;
+}
+.thumb-box button { z-index: 2; }
+.thumb-box:has(.live-thumb.playing) button { opacity: 0 !important; }
+.thumb-box:has(.live-thumb.playing):hover button { opacity: 0.9 !important; }
+
 /* Avisos no bloqueantes (sustituyen a alert): aparecen desde abajo y vuelven por donde vinieron */
 .toast-stack {
     position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 2000;

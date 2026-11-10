@@ -10,6 +10,7 @@ let dbCache = { streamsTotal: 0, streamsActive: 0, streamsError: 0 };
 let lastDbPoll = 0;
 let cpuTempCache = '--';
 let lastTempPoll = 0;
+let lastStats = null; // último muestreo, para /metrics
 
 function getCpuLoad() {
     const cpus = os.cpus();
@@ -75,6 +76,7 @@ function startMonitoring() {
                 cpuTempCache = cpuTempData && cpuTempData.main ? cpuTempData.main.toFixed(1) : '--';
             }
 
+            lastStats = { cpuLoad: currentCpuLoad, cpuTemp: cpuTempCache, memUsedBytes: usedMem, memTotalBytes: totalMem };
             ioInstance.emit('sys_stats', {
                 cpuLoad: currentCpuLoad.toFixed(1),
                 cpuTemp: cpuTempCache,
@@ -97,4 +99,4 @@ function startMonitoring() {
     loop(); // init
 }
 
-module.exports = { setIo };
+module.exports = { setIo, getLastStats: () => lastStats };

@@ -16,6 +16,19 @@ fi
 APP_DIR="/opt/race-control-server"
 SERVICE_NAME="race-control"
 REPO_URL="https://github.com/tossalet/rtsp-server-tsst"
+WEB_PORT=4000
+GRAFANA_PORT=4001 # panel + 1
+
+# Monitorización OPCIONAL (Prometheus + Grafana, ~200 MB de RAM, prioridad baja frente al vídeo):
+#   sudo bash instalar_servidor.sh --monitorizacion
+# Si ya estaba instalada, las actualizaciones normales la mantienen al día sin repetir la opción.
+INSTALL_MONITORING="no"
+for arg in "$@"; do
+    case "$arg" in --monitorizacion|--monitoring) INSTALL_MONITORING="yes" ;; esac
+done
+if dpkg -s grafana >/dev/null 2>&1 && [ -f /etc/systemd/system/grafana-server.service.d/tsst.conf ]; then
+    INSTALL_MONITORING="yes"
+fi
 
 fail() { echo ""; echo "❌ ERROR: $1"; echo "   La instalación se ha detenido. El servicio anterior sigue como estaba."; exit 1; }
 
@@ -115,6 +128,76 @@ net.core.netdev_max_backlog = 5000
 EOF
 sysctl -p /etc/sysctl.d/90-race-control.conf >/dev/null && echo "✅ Buffers de red ampliados para SRT." || echo "⚠️  No se pudieron aplicar los buffers de red."
 
+# ── Monitorización opcional: Prometheus (historial) + Grafana (gráficas) ──
+GRAFANA_ENV=""
+if [ "$INSTALL_MONITORING" = "yes" ]; then
+    echo ""
+    echo "📈 Monitorización: Prometheus + Grafana (opcional, prioridad baja frente al vídeo)..."
+    MON="$APP_DIR/monitoring"
+    FRESH_GRAFANA="yes"; dpkg -s grafana >/dev/null 2>&1 && FRESH_GRAFANA="no"
+
+    apt-get install -y --no-install-recommends prometheus gnupg || fail "instalando Prometheus"
+    cp "$MON/prometheus.yml" /etc/prometheus/prometheus.yml
+    sed -i "s/localhost:4000/localhost:$WEB_PORT/" /etc/prometheus/prometheus.yml
+    # Solo escucha en local (Grafana está en el mismo equipo); 15 días o 1 GB como máximo
+    echo 'ARGS="--web.listen-address=127.0.0.1:9090 --storage.tsdb.retention.time=15d --storage.tsdb.retention.size=1GB"' > /etc/default/prometheus
+
+    if [ "$FRESH_GRAFANA" = "yes" ]; then
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/grafana.gpg || fail "descargando la clave de Grafana"
+        echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
+        apt-get update -qq
+    fi
+    apt-get install -y grafana || fail "instalando Grafana"
+
+    # Fuente de datos y panel precargados (se actualizan en cada instalación)
+    mkdir -p /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards /var/lib/grafana/dashboards/tsst
+    cp "$MON/grafana/provisioning/datasources/tsst.yml" /etc/grafana/provisioning/datasources/tsst.yml
+    cp "$MON/grafana/provisioning/dashboards/tsst.yml" /etc/grafana/provisioning/dashboards/tsst.yml
+    cp "$MON/grafana/dashboards/tsst.json" /var/lib/grafana/dashboards/tsst/tsst.json
+    chown -R grafana:grafana /var/lib/grafana/dashboards
+
+    # El vídeo siempre va primero: poca CPU/disco garantizados y freno suave de memoria (no los mata)
+    mkdir -p /etc/systemd/system/grafana-server.service.d /etc/systemd/system/prometheus.service.d
+    cat > /etc/systemd/system/grafana-server.service.d/tsst.conf << EOF
+[Service]
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=300M
+Environment=GF_SERVER_HTTP_PORT=$GRAFANA_PORT
+Environment=GF_USERS_ALLOW_SIGN_UP=false
+Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+Environment=GF_ANALYTICS_REPORTING_ENABLED=false
+Environment=GF_ANALYTICS_CHECK_FOR_UPDATES=false
+Environment=GF_NEWS_NEWS_FEED_ENABLED=false
+Environment=GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/tsst/tsst.json
+EOF
+    cat > /etc/systemd/system/prometheus.service.d/tsst.conf << 'EOF'
+[Service]
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=250M
+EOF
+    systemctl daemon-reload
+    systemctl enable prometheus grafana-server >/dev/null 2>&1
+    systemctl restart prometheus grafana-server
+
+    # Contraseña del usuario admin de Grafana solo en la primera instalación (si no, Grafana pide cambiarla al entrar)
+    if [ "$FRESH_GRAFANA" = "yes" ] && [ -t 0 ]; then
+        for i in $(seq 1 30); do curl -s "http://127.0.0.1:$GRAFANA_PORT/api/health" >/dev/null && break; sleep 2; done
+        read -r -s -p "   Contraseña para el usuario 'admin' de Grafana (mín. 8 caracteres, vacío = admin y cambiarla al entrar): " GRAFANA_PASS; echo ""
+        if [ ${#GRAFANA_PASS} -ge 8 ]; then
+            grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini admin reset-admin-password "$GRAFANA_PASS" >/dev/null 2>&1 \
+                || grafana-cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini admin reset-admin-password "$GRAFANA_PASS" >/dev/null 2>&1
+            chown -R grafana:grafana /var/lib/grafana
+        fi
+    fi
+    GRAFANA_ENV="Environment=GRAFANA_PORT=$GRAFANA_PORT"
+    echo "✅ Monitorización lista (Grafana en el puerto $GRAFANA_PORT)."
+fi
+
 # ── 7. Crear servicio systemd ─────────────────────────────────
 echo ""
 echo "⚙️  [7/7] Configurando servicio del sistema (arranque automático)..."
@@ -133,7 +216,10 @@ ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
 TimeoutStopSec=10
+# Prioridad para el vídeo frente a la monitorización (CPUWeight 20) si la hay
+CPUWeight=1000
 Environment=NODE_ENV=production
+${GRAFANA_ENV}
 
 [Install]
 WantedBy=multi-user.target
@@ -165,6 +251,15 @@ echo ""
 echo "  📍 Panel de control web:"
 echo "  👉 http://$LOCAL_IP:4000"
 echo ""
+if [ "$INSTALL_MONITORING" = "yes" ]; then
+    echo "  📈 Grafana (gráficas e historial):"
+    echo "  👉 http://$LOCAL_IP:$GRAFANA_PORT   (usuario admin)"
+    echo ""
+else
+    echo "  📈 Gráficas con Grafana (opcional, ~200 MB de RAM):"
+    echo "     sudo bash $APP_DIR/instalar_servidor.sh --monitorizacion"
+    echo ""
+fi
 echo "  🕒 Servidor de hora para las cámaras (NTP):"
 echo "  👉 En cada cámara: NTP = $LOCAL_IP , puerto 123, zona horaria Europe/Madrid"
 echo ""
