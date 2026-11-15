@@ -96,6 +96,9 @@ app.get('/api/status', (req, res) => {
 const metrics = require('./metrics');
 app.get('/metrics', metrics.authorize, metrics.handler);
 
+// Historial de Prometheus para el Dashboard y Analytics (consultas fijas; sin Prometheus: available false)
+app.get('/api/history', require('./history').handler);
+
 // Vídeo en vivo del panel: pedir la lista arranca (o mantiene vivo) el HLS del canal
 app.get('/hls/:channel/index.m3u8', async (req, res) => {
     if (!/^\d+$/.test(req.params.channel)) return res.status(404).end();
@@ -445,17 +448,30 @@ app.get('/api/disks', async (req, res) => {
                 drives.push({
                     id: f.mount.replace(/[:\\\/]/g, '_'), // ID seguro
                     name: `[${f.fs}] ${f.mount}`, // ej: [sda1] /media/pi/USB
-                    path: f.mount
+                    path: f.mount,
+                    device: f.fs,
+                    size: f.size || 0, // bytes totales y usados: barra de capacidad en el panel
+                    used: f.used || 0
                 });
             }
         });
 
         // Incluir siempre mediaRoot como disco de grabación local, el primero
         if (!drives.find(d => d.path === mediaRoot)) {
-            drives.unshift({ id: 'local_mediaroot', name: 'Grabaciones Locales (/media)', path: mediaRoot });
+            drives.unshift({ id: 'local_mediaroot', name: 'Grabaciones Locales', path: mediaRoot });
+        }
+        // Capacidad de las rutas sin datos (statfs existe desde Node 18.15)
+        for (const d of drives) {
+            if (d.size) continue;
+            try {
+                const s = await fs.promises.statfs(d.path);
+                d.size = s.blocks * s.bsize;
+                d.used = (s.blocks - s.bfree) * s.bsize;
+            } catch (e) { /* sin datos de capacidad */ }
         }
 
-        res.json(drives);
+        // Solo las unidades donde se pueden ver y borrar grabaciones (en Windows salían discos de red inaccesibles)
+        res.json(drives.filter(d => resolveAllowed(d.path)));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -485,28 +501,34 @@ app.post('/api/disks/wipe', (req, res) => {
     }
 });
 
-app.get('/api/files', (req, res) => {
+app.get('/api/files', async (req, res) => {
     // ParentDisk es una ruta ABSOLUTA enviada desde el frontend
     const scanPath = resolveAllowed(req.query.disk);
     if (!scanPath) return res.json([]);
 
     try {
-        if (!fs.existsSync(scanPath)) return res.json([]);
+        const entries = await fs.promises.readdir(scanPath, { withFileTypes: true }).catch(() => null);
+        if (!entries) return res.json([]);
+        const names = entries.filter(e => e.isFile() && /\.(mp4|mkv|ts|flv|m3u8)$/i.test(e.name)).map(e => e.name);
+        // Los trozos de una grabación HLS (nombre123.ts junto a nombre.m3u8) no se listan: se lista la grabación
+        // (el nombre base puede llevar números: CAM_1_1777420611796.m3u8 -> CAM_1_17774206117960.ts)
+        const playlists = names.filter(n => /\.m3u8$/i.test(n)).map(n => n.replace(/\.m3u8$/i, ''));
+        const isSegment = n => /\.ts$/i.test(n) && playlists.some(b => n.startsWith(b) && /^\d+\.ts$/i.test(n.slice(b.length)));
+        const visible = names.filter(n => !isSegment(n));
+
+        // stat asíncrono y por tandas: antes era síncrono y, con muchos ficheros, congelaba el servidor
+        // (y el reparto de vídeo a las salidas) mientras se listaba la carpeta
         const files = [];
-        for (const item of fs.readdirSync(scanPath, { withFileTypes: true })) {
-            if (item.isFile() && item.name.match(/\.(mp4|mkv|ts|flv|m3u8)$/i)) {
-                const absolutePath = path.join(scanPath, item.name);
-                const stat = fs.statSync(absolutePath);
-                files.push({
-                    name: item.name,
-                    size: stat.size,
-                    date: stat.mtime,
-                    url: `/api/media/play?path=${encodeURIComponent(absolutePath)}`,
-                    absolutePath: absolutePath
-                });
-            }
+        for (let i = 0; i < visible.length; i += 32) {
+            const batch = await Promise.all(visible.slice(i, i + 32).map(async name => {
+                const absolutePath = path.join(scanPath, name);
+                const stat = await fs.promises.stat(absolutePath).catch(() => null);
+                if (!stat) return null;
+                return { name, size: stat.size, date: stat.mtime, url: `/api/media/play?path=${encodeURIComponent(absolutePath)}`, absolutePath };
+            }));
+            files.push(...batch.filter(Boolean));
         }
-        res.json(files.sort((a,b) => b.date - a.date)); // Fechas más recientes primero
+        res.json(files.sort((a, b) => b.date - a.date)); // Fechas más recientes primero
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -566,7 +588,9 @@ app.put('/api/ports', (req, res) => {
 function bootActiveStreams() {
     console.log("[BOOT] Iniciando secuencia de encendido escalonado de Streams...");
     db.all('SELECT * FROM inputs WHERE enabled = 1', [], (err, rows) => {
+        if (err) return console.error(`[BOOT] No se pudieron leer las entradas: ${err.message}`);
         if (!rows || rows.length === 0) return;
+        console.log(`[BOOT] ${rows.length} entrada(s) activa(s)`);
         let delayAccumulator = 0;
 
         // Stagger inputs by 200ms each to prevent CPU max-out
@@ -577,7 +601,9 @@ function bootActiveStreams() {
 
         // Outputs after all inputs are registered
         db.all('SELECT * FROM outputs WHERE enabled = 1', [], (err, outRows) => {
+            if (err) return console.error(`[BOOT] No se pudieron leer las salidas: ${err.message}`);
             if (!outRows) return;
+            console.log(`[BOOT] ${outRows.length} salida(s) activa(s)`);
             outRows.forEach(o => {
                 setTimeout(() => streamManager.startOutput(o), delayAccumulator);
                 delayAccumulator += 200;

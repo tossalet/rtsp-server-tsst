@@ -172,7 +172,7 @@ function getFFmpegPath() {
 
 function pushTelemetry(key, kbps) {
     if (!telemetryCache[key]) telemetryCache[key] = [];
-    telemetryCache[key].push({ t: new Date().toLocaleTimeString(), y: kbps || 0 });
+    telemetryCache[key].push({ t: Date.now(), y: kbps || 0 }); // t en ms: la gráfica de Analytics usa un eje de tiempo real
     if (telemetryCache[key].length > 60) telemetryCache[key].shift(); // Keep last 60 points
     return telemetryCache[key];
 }

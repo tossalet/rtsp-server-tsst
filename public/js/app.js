@@ -104,8 +104,11 @@ function switchTab(tabId) {
         document.getElementById('topbar-title').innerText = 'Analytics & Telemetry';
         document.getElementById('topbar-subtitle').innerText = 'Deep network inspection tools';
         document.getElementById('btn-add-input').style.display = 'none';
-        
+
         populateAnalyticsGrid();
+        renderSignalStatus();
+        placeHistorySection('analytics-history-slot');
+        loadHistory();
     } else if (tabId === 'system') {
         document.getElementById('streamsContainer').style.display = 'none';
         document.getElementById('analyticsContainer').style.display = 'none';
@@ -115,6 +118,8 @@ function switchTab(tabId) {
         document.getElementById('topbar-title').innerText = 'System Dashboard';
         document.getElementById('topbar-subtitle').innerText = 'Host hardware & overview';
         document.getElementById('btn-add-input').style.display = 'none';
+        placeHistorySection(null);
+        loadHistory();
     } else if (tabId === 'settings') {
         document.getElementById('streamsContainer').style.display = 'none';
         document.getElementById('analyticsContainer').style.display = 'none';
@@ -141,121 +146,285 @@ function switchTab(tabId) {
     syncThumbPlayers(); // al salir de Streams se paran los vídeos en vivo
 }
 
+// Escapa texto del usuario (nombres de cámara, ficheros) antes de meterlo en HTML
+function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function initChart() {
     const ctx = document.getElementById('bitrateChart').getContext('2d');
     telemetryChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: [],
-            datasets: []
-        },
+        data: { datasets: [] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: { 
-                legend: { 
-                    display: true, 
-                    labels: { color: 'rgba(255,255,255,0.7)', font: { family: 'Inter', size: 11 } }
-                },
-                tooltip: { backgroundColor: 'rgba(0,0,0,0.8)' }
+            parsing: false,
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            plugins: {
+                legend: { display: true, labels: { color: 'rgba(255,255,255,0.7)', boxWidth: 12, font: { family: 'Inter', size: 11 } } },
+                tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.85)',
+                    callbacks: {
+                        title: (items) => items.length ? new Date(items[0].parsed.x).toLocaleTimeString() : '',
+                        label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(2)} Mbps`
+                    }
+                }
             },
             scales: {
-                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)', maxTicksLimit: 10 } },
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)' }, min: 0 }
+                // Eje de tiempo real (ms): entradas y salidas informan en instantes distintos,
+                // así cada línea lleva sus propios puntos y no quedan huecos al mezclarlas
+                x: {
+                    type: 'linear',
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: { color: 'rgba(255,255,255,0.4)', maxTicksLimit: 8, maxRotation: 0, callback: (v) => new Date(v).toLocaleTimeString() }
+                },
+                y: { grid: { color: 'rgba(255,255,255,0.05)' }, min: 0, ticks: { color: 'rgba(255,255,255,0.4)', callback: (v) => `${v} Mbps` } }
             }
         }
     });
 }
 
+function analyticsLabel(ch) {
+    if (ch.startsWith('out_')) {
+        const id = parseInt(ch.slice(4), 10);
+        const o = outputs.find(x => x.id === id);
+        return o ? `OUT_${id} (${(o.location || displayUrl(o.url)).substring(0, 24)})` : `OUT_${id}`;
+    }
+    const i = inputs.find(x => String(x.channel) === ch);
+    return i ? `IN_${ch} (${i.name})` : `IN_${ch}`;
+}
+
 function populateAnalyticsGrid() {
     const grid = document.getElementById('analytics_grid');
-    grid.innerHTML = '';
-    let hasStreams = false;
-    
-    inputs.forEach(i => {
-        if (i.enabled) {
-            hasStreams = true;
-            grid.innerHTML += `
-                <div class="analytics-card ${selectedAnalyticsChannels.has(i.channel.toString()) ? 'selected' : ''}" onclick="toggleAnalyticsChannel('${i.channel}')">
-                    <div class="acard-title">${i.name}</div>
-                    <div class="acard-badge">IN_${i.channel}</div>
-                </div>
-            `;
-            
-            // Render corresponding Output cards right next to their Input
-            const inputOutputs = outputs.filter(o => o.channel === i.channel && o.enabled);
-            inputOutputs.forEach(o => {
-                const outId = 'out_' + o.id;
-                const locName = o.location ? o.location : o.url;
-                grid.innerHTML += `
-                    <div class="analytics-card ${selectedAnalyticsChannels.has(outId) ? 'selected' : ''}" onclick="toggleAnalyticsChannel('${outId}')" style="margin-left: 20px; border-left: 3px solid rgba(255,255,255,0.2);">
-                        <div class="acard-title" style="font-size:0.8rem; opacity:0.8;">${locName.substring(0,30)}</div>
-                        <div class="acard-badge" style="background: rgba(255,255,255,0.1);">OUT_${o.id}</div>
-                    </div>
-                `;
-            });
-        }
+    let html = '';
+    inputs.filter(i => i.enabled).forEach(i => {
+        const ch = String(i.channel);
+        html += `
+            <div class="analytics-card ${selectedAnalyticsChannels.has(ch) ? 'selected' : ''}" onclick="toggleAnalyticsChannel('${ch}')">
+                <div class="acard-title">${escapeHtml(i.name)}</div>
+                <div class="acard-badge">IN_${ch}</div>
+            </div>`;
+        // Sus salidas justo al lado de la entrada
+        outputs.filter(o => o.channel === i.channel && o.enabled).forEach(o => {
+            const outId = 'out_' + o.id;
+            html += `
+                <div class="analytics-card ${selectedAnalyticsChannels.has(outId) ? 'selected' : ''}" onclick="toggleAnalyticsChannel('${outId}')" style="margin-left: 20px; border-left: 3px solid rgba(255,255,255,0.2);">
+                    <div class="acard-title" style="font-size:0.8rem; opacity:0.8;">${escapeHtml((o.location || displayUrl(o.url)).substring(0, 30))}</div>
+                    <div class="acard-badge" style="background: rgba(255,255,255,0.1);">OUT_${o.id}</div>
+                </div>`;
+        });
     });
-    
-    if(!hasStreams) {
-        grid.innerHTML = '<div style="color:var(--text-muted); font-size:0.9rem;">-- No Active Streams --</div>';
-    }
+    grid.innerHTML = html || '<div style="color:var(--text-muted); font-size:0.9rem;">No hay señales activas</div>';
 }
 
 function updateTelemetryChart() {
     if (!telemetryChart) return;
-    
-    let allTimesSet = new Set();
-    const activeChannels = Array.from(selectedAnalyticsChannels);
-    
-    // Recopilar la base de tiempo común de los canales seleccionados
-    activeChannels.forEach(ch => {
-        if(frontendTelemetryCache[ch]) {
-            frontendTelemetryCache[ch].forEach(dp => allTimesSet.add(dp.t));
-        }
-    });
-    
-    const sortedTimes = Array.from(allTimesSet).sort();
-    telemetryChart.data.labels = sortedTimes;
-    
-    // Reconstruir datasets superpuestos
-    telemetryChart.data.datasets = activeChannels.map((ch, index) => {
+    telemetryChart.data.datasets = Array.from(selectedAnalyticsChannels).map((ch, index) => {
         const color = chartColors[index % chartColors.length];
-        
-        let labelName = `Channel ${ch}`;
-        if (ch.toString().startsWith('out_')) {
-            const numId = parseInt(ch.toString().replace('out_', ''));
-            const outInfo = outputs.find(o => o.id === numId);
-            if (outInfo) labelName = `OUT_${numId} (${(outInfo.location || outInfo.url).substring(0, 20)})`;
-        } else {
-            const inpInfo = inputs.find(i => i.channel.toString() === ch.toString());
-            if (inpInfo) labelName = `IN_${ch} (${inpInfo.name})`;
-        }
-        
-        // Mapear datos a la base de tiempo unificada (0 si no existe para ese tick)
-        const dataMap = new Map();
-        if(frontendTelemetryCache[ch]) {
-            frontendTelemetryCache[ch].forEach(dp => dataMap.set(dp.t, dp.y));
-        }
-        
-        const mappedData = sortedTimes.map(t => dataMap.has(t) ? dataMap.get(t) : null);
+        const points = (frontendTelemetryCache[ch] || [])
+            .filter(dp => typeof dp.t === 'number')
+            .map(dp => ({ x: dp.t, y: dp.y / 1000 })); // kbps -> Mbps
+        return { label: analyticsLabel(ch), data: points, borderColor: color, backgroundColor: color + '22', borderWidth: 2, tension: 0.3, fill: false, pointRadius: 0 };
+    });
+    telemetryChart.update('none');
+}
 
+/* ===================================
+ * ESTADO DE LAS SEÑALES (Analytics), en vivo desde los eventos 'stats'
+ * =================================== */
+const liveStats = {}; // 'channel' | 'out_id' -> último evento stats + hora de llegada
+let signalStatusTimer = null;
+
+function noteLiveStats(data) {
+    const key = String(data.channel);
+    liveStats[key] = { ...(liveStats[key] || {}), ...data, at: Date.now() };
+    // Como mucho un repintado por segundo, y solo con Analytics a la vista
+    if (signalStatusTimer || document.getElementById('analyticsContainer').style.display === 'none') return;
+    signalStatusTimer = setTimeout(() => { signalStatusTimer = null; renderSignalStatus(); }, 1000);
+}
+
+function signalState(enabled, s) {
+    if (!enabled) return { cls: 'off', text: 'Apagada' };
+    if (!s || Date.now() - s.at > 6000 || !s.active) return { cls: 'bad', text: 'Sin datos' };
+    return parseFloat(s.bitrate) > 0 ? { cls: 'good', text: 'En vivo' } : { cls: 'warn', text: 'Esperando señal' };
+}
+
+const OUTPUT_CODECS = { h264_vaapi: 'H.264 · VAAPI', hevc_vaapi: 'H.265 · VAAPI', h264_qsv: 'H.264 · QSV', hevc_qsv: 'H.265 · QSV', libx264: 'H.264 · CPU', libx265: 'H.265 · CPU' };
+function outputCodecText(o) {
+    const vcodec = o.vcodec || 'copy';
+    if (vcodec !== 'copy') return OUTPUT_CODECS[vcodec] || vcodec;
+    const inStats = liveStats[String(o.channel)];
+    return inStats && inStats.codec ? `${inStats.codec} · passthrough` : 'Passthrough';
+}
+
+function signalRow(key, name, proto, enabled, isOutput, codecText, url, latencyText) {
+    const s = liveStats[key];
+    const st = signalState(enabled, s);
+    const kbps = s && st.cls !== 'off' ? parseFloat(s.bitrate) || 0 : null;
+    const dash = '—';
+    return `<tr class="${isOutput ? 'sig-out' : 'sig-in'}">
+        <td>${isOutput ? '<span class="sig-branch">↳</span>' : ''}${escapeHtml(name)} <span class="sig-proto">${proto}</span></td>
+        <td><span class="sig-state ${st.cls}">${st.text}</span></td>
+        <td>${kbps === null ? dash : `${(kbps / 1000).toFixed(2)} Mbps`}</td>
+        <td>${s && s.time && st.cls === 'good' ? s.time : dash}</td>
+        <td>${codecText ? escapeHtml(codecText) : (!isOutput && s && s.codec ? escapeHtml(s.codec) : dash)}</td>
+        <td>${latencyText || dash}</td>
+    </tr>`;
+}
+
+function renderSignalStatus() {
+    const body = document.getElementById('signal-status-body');
+    if (!body) return;
+    let rows = '';
+    let live = 0, waiting = 0, off = 0;
+    inputs.forEach(i => {
+        const key = String(i.channel);
+        const st = signalState(i.enabled, liveStats[key]).cls;
+        if (st === 'good') live++; else if (st === 'off') off++; else waiting++;
+        const inLat = i.latency_ms ? `${i.latency_ms} ms` : (i.url.startsWith('srt://') ? `${srtLatencyMs(i.url)} ms` : null);
+        rows += signalRow(key, i.name, i.url.split('://')[0].toUpperCase(), i.enabled, false, null, i.url, inLat);
+        outputs.filter(o => o.channel === i.channel).forEach(o => {
+            rows += signalRow('out_' + o.id, o.location || displayUrl(o.url), o.url.split('://')[0].toUpperCase(), o.enabled, true,
+                outputCodecText(o), o.url, o.url.startsWith('srt') ? `${srtLatencyMs(o.url)} ms` : null);
+        });
+    });
+    body.innerHTML = rows || '<tr><td colspan="6" style="color:var(--text-muted);">No hay señales configuradas.</td></tr>';
+    document.getElementById('signal-status-count').textContent = `${live} en vivo · ${waiting} sin señal · ${off} apagadas`;
+}
+
+/* ===================================
+ * HISTORIAL (Prometheus: lo mismo que Grafana, sin salir del panel)
+ * Un solo bloque que se coloca en el Dashboard o en Analytics según la pestaña.
+ * =================================== */
+let historyRange = '1h';
+let historyLoading = false;
+const historyCharts = {};
+let historyHome = null;
+
+function placeHistorySection(slotId) {
+    const section = document.getElementById('history-section');
+    if (!section) return;
+    if (!historyHome) historyHome = { parent: section.parentNode, next: section.nextSibling };
+    if (slotId) document.getElementById(slotId).appendChild(section);
+    else historyHome.parent.insertBefore(section, historyHome.next);
+    Object.values(historyCharts).forEach(c => c.resize()); // Chart.js recalcula el tamaño al volver a estar visible
+}
+
+function setHistoryRange(range) {
+    historyRange = range;
+    document.querySelectorAll('.history-ranges button').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+    loadHistory();
+}
+
+function historyLabel(labels) {
+    return labels.name || labels.location || (labels.channel ? `Canal ${labels.channel}` : 'Serie');
+}
+
+function timeLabel(ts, range) {
+    const d = new Date(ts * 1000);
+    const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return range === '24h' ? `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${hm}` : hm;
+}
+
+// Una gráfica de líneas: todas las series comparten los instantes (mismo step de Prometheus)
+function drawHistoryChart(id, seriesList, { scale = 1, unit = '', max } = {}) {
+    const ts = [...new Set(seriesList.flatMap(s => s.values.map(v => v[0])))].sort((a, b) => a - b);
+    const datasets = seriesList.map((s, i) => {
+        const byTs = new Map(s.values.map(([t, v]) => [t, v * scale]));
+        const color = s.color || chartColors[i % chartColors.length];
         return {
-            label: labelName,
-            data: mappedData,
-            borderColor: color,
-            backgroundColor: color.replace(')', ', 0.1)').replace('rgb', 'rgba'),
-            borderWidth: 2,
-            tension: 0.4,
-            fill: false, // Superimposed graphs shouldn't be fully solid filled to avoid hiding each other
-            pointRadius: 0
+            label: s.label || historyLabel(s.labels),
+            data: ts.map(t => (byTs.has(t) ? byTs.get(t) : null)),
+            borderColor: color, backgroundColor: color + '22', borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: false
         };
     });
-    
-    telemetryChart.update();
+    const labels = ts.map(t => timeLabel(t, historyRange));
+    let chart = historyCharts[id];
+    if (!chart) {
+        chart = historyCharts[id] = new Chart(document.getElementById(id).getContext('2d'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, labels: { color: 'rgba(255,255,255,0.7)', boxWidth: 12, font: { family: 'Inter', size: 11 } } },
+                    tooltip: { backgroundColor: 'rgba(0,0,0,0.85)', callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y === null ? '—' : c.parsed.y.toFixed(2)} ${unit}` } }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)', maxTicksLimit: 8, maxRotation: 0 } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: 'rgba(255,255,255,0.4)', callback: (v) => `${v} ${unit}` }, min: 0, max }
+                }
+            }
+        });
+    } else {
+        chart.data.labels = labels;
+        chart.data.datasets = datasets;
+        chart.update('none');
+    }
 }
+
+function renderHistorySummary(rows) {
+    const body = document.getElementById('history-summary');
+    if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted);">Sin datos de señales en este periodo.</td></tr>';
+        return;
+    }
+    rows.sort((a, b) => Number(a.channel) - Number(b.channel));
+    const mbps = v => v === undefined ? '—' : `${(v / 1e6).toFixed(2)} Mbps`;
+    body.innerHTML = rows.map(r => {
+        const av = r.availability;
+        const avClass = av === undefined ? '' : av >= 0.999 ? 'good' : av >= 0.95 ? 'warn' : 'bad';
+        const restarts = r.restarts === undefined ? '—' : Math.round(r.restarts);
+        return `<tr>
+            <td>${escapeHtml(r.name || 'Canal ' + r.channel)}</td>
+            <td class="${avClass}">${av === undefined ? '—' : `${(av * 100).toFixed(1)} %`}</td>
+            <td class="${restarts > 0 ? 'warn' : ''}">${restarts}</td>
+            <td>${mbps(r.avgBitrate)}</td>
+            <td class="${r.minBitrate === 0 ? 'warn' : ''}">${mbps(r.minBitrate)}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadHistory() {
+    const msg = document.getElementById('history-msg');
+    const body = document.getElementById('history-body');
+    if (historyLoading || !msg || !body) return; // sección aún no presente en la página
+    historyLoading = true;
+    try {
+        const data = await fetch(`/api/history?range=${historyRange}`).then(r => r.json());
+        if (!data.available) {
+            body.style.display = 'none';
+            msg.style.display = 'block';
+            msg.innerHTML = 'Historial no disponible: instala la monitorización (Prometheus + Grafana, opcional) con<br><code>sudo bash /opt/race-control-server/instalar_servidor.sh --monitorizacion</code>';
+            return;
+        }
+        msg.style.display = 'none';
+        body.style.display = 'block';
+        renderHistorySummary(data.summary);
+        const s = data.series;
+        drawHistoryChart('hist_input', s.inputBitrate, { scale: 1e-6, unit: 'Mbps' });
+        drawHistoryChart('hist_output', s.outputBitrate, { scale: 1e-6, unit: 'Mbps' });
+        drawHistoryChart('hist_restarts', s.restartsPerHour, { unit: '/h' });
+        drawHistoryChart('hist_host', [
+            ...s.cpu.map(x => ({ ...x, label: 'CPU', color: '#60A5FA' })),
+            ...s.memory.map(x => ({ ...x, label: 'Memoria', color: '#34d399' }))
+        ], { scale: 100, unit: '%', max: 100 });
+    } catch (e) {
+        msg.style.display = 'block';
+        msg.textContent = 'No se pudo cargar el historial.';
+    } finally {
+        historyLoading = false;
+    }
+}
+
+// Refresco cada 30 s, solo con el Dashboard o Analytics a la vista y la pestaña del navegador activa
+setInterval(() => {
+    const visible = ['systemContainer', 'analyticsContainer'].some(id => document.getElementById(id).style.display !== 'none');
+    if (visible && !document.hidden) loadHistory();
+}, 30000);
 
 function toggleAnalyticsChannel(channelId) {
     const chStr = channelId.toString();
@@ -390,6 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('stats', (data) => {
+        noteLiveStats(data); // tabla "Estado de las señales" de Analytics
         const bitElem = document.getElementById(`bitrate-${data.channel}`);
         const timeElem = document.getElementById(`time-${data.channel}`);
         const ledElem = document.getElementById(`led-${data.channel}`);
@@ -822,6 +992,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const a = document.getElementById('nav-grafana');
         a.href = `${location.protocol}//${location.hostname}:${s.grafanaPort}/`;
         a.hidden = false;
+        // Mismo enlace en la cabecera del historial (Dashboard y Analytics)
+        const h = document.getElementById("history-grafana");
+        if (h) { h.href = a.href; h.style.display = "inline-flex"; }
     }).catch(() => {});
 });
 
@@ -1039,98 +1212,166 @@ function openEditInput(channel) {
 // ===================================
 // FILE MANAGEMENT LOGIC
 // ===================================
+// Disco elegido y archivos cargados: la búsqueda filtra en el navegador sin volver a pedirlos
+let recDisk = null;
+let recFiles = [];
+let recDisks = [];
+
+function fmtBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    const v = n / Math.pow(1024, i);
+    return `${v.toLocaleString('es-ES', { maximumFractionDigits: v < 10 && i > 1 ? 1 : 0 })} ${u[i]}`;
+}
+
+function diskLabel(d) {
+    if (d.id === 'local_mediaroot') return d.name;
+    const seg = String(d.path).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    return seg || d.path;
+}
+
 async function fetchStorage() {
+    const grid = document.getElementById('storageDisksGrid');
+    if (!recDisks.length) grid.innerHTML = '<div class="rec-disk sk-card"></div><div class="rec-disk sk-card"></div>';
     try {
         const res = await fetch('/api/disks');
-        const disks = await res.json();
-        
-        // Populate Grid
-        const grid = document.getElementById('storageDisksGrid');
-        grid.innerHTML = '';
-        const select = document.getElementById('storageDiskSelect');
-        const currentSelection = select.value;
-        select.innerHTML = '';
-        
-        if (disks.length === 0) {
-            grid.innerHTML = '<div style="grid-column: span 3; text-align:center; padding: 20px; color:var(--text-muted);">No hay discos externos conectados.</div>';
-            return;
-        }
+        recDisks = await res.json();
+        if (!Array.isArray(recDisks)) recDisks = [];
+    } catch (e) {
+        grid.innerHTML = '<div class="rec-empty"><i class="fa-solid fa-plug-circle-xmark"></i><p>No se pudo consultar los discos.</p></div>';
+        return;
+    }
+    if (!recDisks.length) {
+        recDisk = null;
+        grid.innerHTML = '<div class="rec-empty"><i class="fa-brands fa-usb"></i><h3>No hay discos conectados</h3><p>Conecta un USB al servidor y pulsa recargar.</p></div>';
+        document.getElementById('storageFilesList').innerHTML = '';
+        document.getElementById('recSummary').textContent = '';
+        return;
+    }
+    if (!recDisks.find(d => d.path === recDisk)) recDisk = recDisks[0].path;
+    renderDisks();
+    fetchFiles();
+}
 
-        disks.forEach(d => {
-            // UI Grid
-            grid.innerHTML += `
-                <div class="analytics-card" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
-                    <div class="acard-title"><i class="fa-solid fa-hard-drive"></i> ${d.name}</div>
-                    <div class="acard-badge" style="background:var(--accent-blue);">Activo</div>
-                    <div style="font-size: 0.8rem; margin-top: 10px; color: var(--text-muted); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${d.path}</div>
+function renderDisks() {
+    document.getElementById('storageDisksGrid').innerHTML = recDisks.map(d => {
+        const pct = d.size ? Math.min(100, Math.round(d.used / d.size * 100)) : null;
+        const level = pct === null ? '' : pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+        const sel = d.path === recDisk;
+        return `
+            <button class="rec-disk ${sel ? 'selected' : ''}" role="radio" aria-checked="${sel}" data-path="${escapeHtml(d.path)}" onclick="selectDisk(this.dataset.path)">
+                <div class="rec-disk-top">
+                    <span class="rec-disk-icon"><i class="fa-solid fa-hard-drive"></i></span>
+                    <span class="rec-disk-name">${escapeHtml(diskLabel(d))}${diskLabel(d) !== d.path ? `<small>${escapeHtml(d.path)}</small>` : ''}</span>
+                    ${sel ? '<i class="fa-solid fa-circle-check rec-disk-check"></i>' : ''}
                 </div>
-            `;
-            // Select Population
-            const opt = document.createElement('option');
-            opt.value = d.path; // Enviamos absolPath limpio a /api/files
-            opt.innerText = d.name;
-            select.appendChild(opt);
-        });
+                ${pct === null ? '<div class="rec-disk-meta">Capacidad desconocida</div>' : `
+                <div class="rec-cap ${level}"><div style="width:${pct}%"></div></div>
+                <div class="rec-disk-meta"><span><b>${fmtBytes(d.size - d.used)}</b> libres</span><span>${pct}% de ${fmtBytes(d.size)}</span></div>`}
+            </button>`;
+    }).join('');
+}
 
-        // Maintain selection or def to first
-        if (currentSelection && disks.find(d => d.path === currentSelection)) {
-            select.value = currentSelection;
-        } else {
-            select.selectedIndex = 0;
-        }
-        
-        fetchFiles();
-        
-    } catch(e) { console.error('fetchStorage failed', e); }
+function selectDisk(p) {
+    if (p === recDisk) return;
+    recDisk = p;
+    recFiles = [];
+    renderDisks();
+    fetchFiles();
 }
 
 async function fetchFiles() {
-    const parentDisk = document.getElementById('storageDiskSelect').value;
-    if (!parentDisk) return;
+    if (!recDisk) return;
+    const list = document.getElementById('storageFilesList');
+    if (!recFiles.length) list.innerHTML = '<div class="rec-row sk-row"></div><div class="rec-row sk-row"></div><div class="rec-row sk-row"></div>';
     try {
-        const res = await fetch(`/api/files?disk=${encodeURIComponent(parentDisk)}`);
-        const files = await res.json();
-        
-        const tbody = document.getElementById('storageFilesList');
-        tbody.innerHTML = '';
-        
-        if (files.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 20px; color:var(--text-muted);">No hay grabaciones en este disco.</td></tr>';
-            return;
-        }
-
-        files.forEach(f => {
-            const sizeMB = (f.size / (1024*1024)).toFixed(1);
-            const dStr = new Date(f.date).toLocaleString('es-ES', { dateStyle:'short', timeStyle:'short' });
-            const sName = f.name;
-            
-            tbody.innerHTML += `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
-                    <td style="padding: 12px 10px; color: var(--text-main); font-weight: 500;"><i class="fa-regular fa-file-video" style="color:var(--accent-blue); margin-right:8px;"></i>${sName}</td>
-                    <td style="padding: 12px 10px;">${sizeMB} MB</td>
-                    <td style="padding: 12px 10px;">${dStr}</td>
-                    <td style="padding: 12px 10px; text-align:right;">
-                        <button onclick="previewFile('${f.url}', '${f.name}')" class="action-btn toggle-enabled" title="Previsualizar" style="background:var(--accent-blue);"><i class="fa-solid fa-play"></i></button>
-                        <a href="${f.url}" download="${f.name}" class="action-btn toggle-enabled" title="Descargar" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center; margin-left: 5px;"><i class="fa-solid fa-download"></i></a>
-                        <button onclick="deleteFile('${f.url}')" class="action-btn terminate" title="Eliminar" style="margin-left: 5px;"><i class="fa-solid fa-trash"></i></button>
-                    </td>
-                </tr>
-            `;
-        });
-    } catch(e) { console.error('fetchFiles failed', e); }
+        const res = await fetch(`/api/files?disk=${encodeURIComponent(recDisk)}`);
+        recFiles = await res.json();
+        if (!Array.isArray(recFiles)) recFiles = [];
+    } catch (e) {
+        recFiles = [];
+        list.innerHTML = '<div class="rec-empty"><p>No se pudo leer el disco.</p></div>';
+        return;
+    }
+    renderFiles();
 }
 
-async function deleteFile(urlPath) {
-    if (confirm("¿Estás seguro de eliminar esta grabación de forma permanente?")) {
-        try {
-            await fetch('/api/files/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filepath: urlPath })
-            });
-            fetchFiles();
-        } catch(e) { toast("No se pudo borrar el fichero"); }
+function recDayLabel(d) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(d); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 86400000);
+    if (diff === 0) return 'Hoy';
+    if (diff === 1) return 'Ayer';
+    const txt = day.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: day.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
+    return txt.charAt(0).toUpperCase() + txt.slice(1);
+}
+
+function renderFiles() {
+    const list = document.getElementById('storageFilesList');
+    const q = (document.getElementById('recSearch').value || '').trim().toLowerCase();
+    const files = q ? recFiles.filter(f => f.name.toLowerCase().includes(q)) : recFiles;
+    const total = recFiles.reduce((a, f) => a + (f.size || 0), 0);
+    document.getElementById('recSummary').textContent = recFiles.length
+        ? `${recFiles.length} archivo${recFiles.length > 1 ? 's' : ''} · ${fmtBytes(total)}` : '';
+
+    if (!recFiles.length) {
+        list.innerHTML = '<div class="rec-empty"><i class="fa-regular fa-folder-open"></i><h3>Todavía no hay grabaciones</h3><p>Añade a una entrada una salida de tipo "Grabar en disco" y los archivos aparecerán aquí.</p></div>';
+        return;
     }
+    if (!files.length) {
+        list.innerHTML = `<div class="rec-empty"><p>Ninguna grabación contiene «${escapeHtml(q)}».</p></div>`;
+        return;
+    }
+    const now = Date.now();
+    let html = '', lastDay = '';
+    files.forEach(f => {
+        const date = new Date(f.date);
+        const day = recDayLabel(date);
+        if (day !== lastDay) { html += `<div class="rec-day">${day}</div>`; lastDay = day; }
+        const ext = (f.name.split('.').pop() || '').toUpperCase();
+        // Escrito hace menos de 15 s: casi seguro que se está grabando ahora mismo
+        const live = now - date.getTime() < 15000;
+        const idx = recFiles.indexOf(f);
+        html += `
+            <div class="rec-row ${live ? 'live' : ''}">
+                <button class="rec-thumb" onclick="previewRec(${idx})" title="Reproducir" aria-label="Reproducir ${escapeHtml(f.name)}"><i class="fa-solid fa-play"></i></button>
+                <div class="rec-info">
+                    <div class="rec-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+                    <div class="rec-meta">
+                        ${live ? '<span class="rec-live"><span></span>Grabando</span>' : ''}
+                        <span>${date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>${fmtBytes(f.size)}</span>
+                        <span class="rec-ext">${escapeHtml(ext)}</span>
+                    </div>
+                </div>
+                <div class="rec-actions">
+                    <a class="action-btn" href="${f.url}" download="${escapeHtml(f.name)}" title="Descargar" aria-label="Descargar"><i class="fa-solid fa-download"></i></a>
+                    <button class="action-btn delete-btn" onclick="deleteRec(${idx})" title="${live ? 'No se puede borrar mientras se graba' : 'Borrar'}" aria-label="Borrar" ${live ? 'disabled' : ''}><i class="fa-solid fa-trash"></i></button>
+                </div>
+            </div>`;
+    });
+    list.innerHTML = html;
+}
+
+function previewRec(i) { const f = recFiles[i]; if (f) previewFile(f.url, f.name); }
+
+async function deleteRec(i) {
+    const f = recFiles[i];
+    if (!f) return;
+    if (!confirm(`¿Borrar «${f.name}» (${fmtBytes(f.size)})? No se puede deshacer.`)) return;
+    try {
+        const r = await fetch('/api/files/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filepath: f.url })
+        });
+        if (!r.ok) throw new Error();
+        toast(`Borrada · ${f.name}`, 'success', 2500);
+        recFiles = recFiles.filter(x => x !== f);
+        renderFiles();
+        fetchStorage(); // el espacio libre del disco cambia
+    } catch (e) { toast('No se pudo borrar la grabación'); }
 }
 
 function previewFile(url, fname) {

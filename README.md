@@ -40,6 +40,16 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
   cámara mirada), guarda los trozos en RAM y lo apaga a los 15 s de que nadie mire. Si la cámara es H.265 y el
   navegador no lo reproduce, se queda la imagen fija.
 
+- **Dashboard e historial**: con la monitorización instalada, el Dashboard muestra el historial de Prometheus
+  (lo mismo que Grafana) sin salir del panel: tabla por cámara (% del tiempo con señal, reconexiones, bitrate
+  medio y mínimo) y gráficas de bitrate de entrada y salida, reconexiones, CPU y memoria, por periodo
+  (15 min, 1 h, 6 h, 24 h). Botón "Abrir Grafana" para el panel completo.
+- **Analytics**: gráfica continua del último minuto de las señales marcadas, tabla "Estado de las señales"
+  (estado, bitrate, tiempo en el aire, códec y latencia de cada entrada y salida) y el mismo historial.
+- **Storage**: cada disco con su espacio libre (amarillo al 75 %, rojo al 90 %), grabaciones agrupadas por día con
+  buscador, reproducción, descarga y borrado. Las grabaciones HLS aparecen como una sola entrada (sin sus trozos)
+  y lo que se está grabando ahora no se puede borrar.
+
 ## Gráficas con Grafana (opcional)
 
 ```bash

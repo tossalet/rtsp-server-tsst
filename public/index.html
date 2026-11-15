@@ -55,47 +55,35 @@
             </section>
             
             <section class="storage-container" id="storageContainer" style="display:none; padding-bottom: 2rem;">
-                <div class="storage-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
-                    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; display:flex; align-items:center; gap:10px;">
-                        <i class="fa-solid fa-usb"></i> Discos Externos Conectados
-                        <button onclick="fetchStorage()" style="background:transparent; border:none; color:var(--accent-blue); cursor:pointer; margin-left:auto;"><i class="fa-solid fa-rotate-right"></i></button>
-                    </h2>
-                    <p style="color:var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Lista de unidades USB detectadas por el sistema listas para la grabación continua.</p>
-                    <div id="storageDisksGrid" class="analytics-grid">
-                        <!-- Discos UI -->
+                <div class="rec-section">
+                    <div class="rec-head">
+                        <div>
+                            <h2>Discos</h2>
+                            <p>Elige dónde mirar. Las salidas de grabación a disco escriben en estas unidades.</p>
+                        </div>
+                        <button class="rec-icon-btn" onclick="fetchStorage()" title="Volver a buscar discos" aria-label="Volver a buscar discos"><i class="fa-solid fa-rotate-right"></i></button>
                     </div>
+                    <div id="storageDisksGrid" class="rec-disks" role="radiogroup" aria-label="Disco"></div>
                 </div>
 
-                <div class="storage-files" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
-                        <h3 style="font-size: 1.1rem; font-weight: 600;"><i class="fa-regular fa-folder-open"></i> Explorador de Grabaciones</h3>
-                        <select id="storageDiskSelect" onchange="fetchFiles()" class="form-control" style="width:200px; padding: 5px; height: 32px; font-size: 0.8rem;">
-                            <!-- Opciones -->
-                        </select>
+                <div class="rec-section">
+                    <div class="rec-head">
+                        <div>
+                            <h2>Grabaciones <span id="recSummary" class="rec-summary"></span></h2>
+                        </div>
+                        <label class="rec-search">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="search" id="recSearch" placeholder="Buscar por nombre" oninput="renderFiles()" autocomplete="off">
+                        </label>
                     </div>
-                    
-                    <div style="overflow-x: auto;">
-                        <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 0.9rem;">
-                            <thead>
-                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--text-muted);">
-                                    <th style="padding: 10px;">Nombre</th>
-                                    <th style="padding: 10px;">Tamaño</th>
-                                    <th style="padding: 10px;">Fecha</th>
-                                    <th style="padding: 10px; text-align:right;">Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody id="storageFilesList">
-                                <!-- Archivos -->
-                            </tbody>
-                        </table>
-                    </div>
+                    <div id="storageFilesList" class="rec-list"></div>
                 </div>
             </section>
-            
+
             <section class="analytics-container" id="analyticsContainer" style="display:none; padding-bottom: 2rem;">
                 <div class="analytics-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
-                    <h2>Real-Time Telemetry</h2>
-                    <p style="color:var(--text-muted); font-size: 0.9rem; margin-bottom: 0;">Monitor the live bandwidth and stability of active encoding tunnels.</p>
+                    <h2>Telemetría en tiempo real</h2>
+                    <p style="color:var(--text-muted); font-size: 0.9rem; margin-bottom: 0;">Marca entradas y salidas para ver su ancho de banda del último minuto.</p>
                     <div id="analytics_grid" class="analytics-grid">
                         <!-- Populated by JS -->
                     </div>
@@ -103,6 +91,22 @@
                 <div class="chart-wrapper" style="background: var(--panel-bg); backdrop-filter: blur(16px); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--panel-border); height: 400px; display:flex; align-items:center; justify-content:center;">
                     <canvas id="bitrateChart" style="width:100%; height:100%;"></canvas>
                 </div>
+                <div class="signal-status">
+                    <div class="signal-status-head">
+                        <h3><i class="fa-solid fa-signal"></i> Estado de las señales</h3>
+                        <span id="signal-status-count" class="signal-status-count"></span>
+                    </div>
+                    <div class="history-table-wrap">
+                        <table class="history-table signal-table">
+                            <thead><tr>
+                                <th>Señal</th><th>Estado</th><th>Bitrate</th><th>En el aire</th><th>Códec</th><th title="Latencia SRT configurada">Latencia</th>
+                            </tr></thead>
+                            <tbody id="signal-status-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Aquí se coloca el historial de Prometheus al abrir Analytics -->
+                <div id="analytics-history-slot"></div>
             </section>
             <section class="system-container" id="systemContainer">
                 <div class="storage-header" style="padding: 1.5rem; background: rgba(0,0,0,0.2); border-radius: 12px; margin-bottom: 1.5rem;">
@@ -157,6 +161,38 @@
                     <div class="sys-stat-card error" style="cursor:pointer;" onclick="setDashboardFilter('offline')">
                         <div class="sys-sc-title">Offline / Disabled</div>
                         <div class="sys-sc-value" id="sys_routes_err" style="color:var(--color-red);">--</div>
+                    </div>
+                </div>
+
+
+                <!-- Historial de Prometheus (lo mismo que Grafana, sin salir del panel) -->
+                <div id="history-section" class="history-section">
+                    <div class="history-header">
+                        <h2><i class="fa-solid fa-clock-rotate-left"></i> Historial</h2>
+                        <div class="history-controls">
+                            <div class="history-ranges" role="group" aria-label="Periodo">
+                                <button type="button" data-range="15m" onclick="setHistoryRange('15m')">15 min</button>
+                                <button type="button" data-range="1h" onclick="setHistoryRange('1h')" class="active">1 h</button>
+                                <button type="button" data-range="6h" onclick="setHistoryRange('6h')">6 h</button>
+                                <button type="button" data-range="24h" onclick="setHistoryRange('24h')">24 h</button>
+                            </div>
+                            <a id="history-grafana" class="btn-secondary history-grafana" target="_blank" rel="noopener" style="display:none;"><i class="fa-solid fa-chart-area"></i> Abrir Grafana</a>
+                        </div>
+                    </div>
+                    <p id="history-msg" class="history-msg">Cargando historial…</p>
+                    <div id="history-body" style="display:none;">
+                        <div class="history-table-wrap">
+                            <table class="history-table">
+                                <thead><tr><th>Señal</th><th>Con señal</th><th>Reconexiones</th><th>Bitrate medio</th><th>Bitrate mínimo</th></tr></thead>
+                                <tbody id="history-summary"></tbody>
+                            </table>
+                        </div>
+                        <div class="history-charts">
+                            <div class="history-chart"><h3>Bitrate de entrada</h3><div class="history-canvas"><canvas id="hist_input"></canvas></div></div>
+                            <div class="history-chart"><h3>Bitrate de salida</h3><div class="history-canvas"><canvas id="hist_output"></canvas></div></div>
+                            <div class="history-chart"><h3>Reconexiones por hora</h3><div class="history-canvas"><canvas id="hist_restarts"></canvas></div></div>
+                            <div class="history-chart"><h3>CPU y memoria del mini PC</h3><div class="history-canvas"><canvas id="hist_host"></canvas></div></div>
+                        </div>
                     </div>
                 </div>
 
