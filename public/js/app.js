@@ -398,7 +398,7 @@ async function loadHistory() {
         if (!data.available) {
             body.style.display = 'none';
             msg.style.display = 'block';
-            msg.innerHTML = 'Historial no disponible: instala la monitorización (Prometheus + Grafana, opcional) con<br><code>sudo bash /opt/race-control-server/instalar_servidor.sh --monitorizacion</code>';
+            msg.innerHTML = 'Historial no disponible: instala la monitorización (Prometheus + Grafana, opcional) con<br><code>sudo bash ~/rtsp-server-tsst/instalar_servidor.sh --monitorizacion</code>';
             return;
         }
         msg.style.display = 'none';

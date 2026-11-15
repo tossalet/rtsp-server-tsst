@@ -6,18 +6,18 @@ Pensado para el mini PC HP EliteDesk 800 G5 (i7-9700, Intel UHD 630) con Debian 
 ## Instalar o actualizar
 
 ```bash
-sudo bash /opt/race-control-server/instalar_servidor.sh
+sudo bash ~/rtsp-server-tsst/instalar_servidor.sh
 ```
 
 Si es la primera vez y la carpeta no existe:
 
 ```bash
-sudo git clone https://github.com/tossalet/rtsp-server-tsst /opt/race-control-server
-sudo bash /opt/race-control-server/instalar_servidor.sh
+git clone https://github.com/tossalet/rtsp-server-tsst ~/rtsp-server-tsst
+sudo bash ~/rtsp-server-tsst/instalar_servidor.sh
 ```
 
-El mismo script instala y actualiza. **Nunca toca** `data/` (base de datos `race-control.db`), `logs/` ni `media/`.
-Antes de actualizar, por precaución: `sudo cp -a /opt/race-control-server/data ~/data-backup-$(date +%F)`
+El mismo script instala y actualiza, en la carpeta donde está (aquí `~/rtsp-server-tsst`). **Nunca toca** `data/` (base de datos `race-control.db`), `logs/` ni `media/`.
+Antes de actualizar, por precaución: `sudo cp -a ~/rtsp-server-tsst/data ~/data-backup-$(date +%F)`
 
 Panel web: `http://IP-DEL-MINI-PC:4000`
 
@@ -53,7 +53,7 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
 ## Gráficas con Grafana (opcional)
 
 ```bash
-sudo bash /opt/race-control-server/instalar_servidor.sh --monitorizacion
+sudo bash ~/rtsp-server-tsst/instalar_servidor.sh --monitorizacion
 ```
 
 Instala Prometheus (historial, 15 días como máximo) y Grafana en el puerto **4001**, con un panel ya preparado:

@@ -13,8 +13,19 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-APP_DIR="/opt/race-control-server"
+# Carpeta del servidor: la misma donde está este script si es una copia del repositorio
+# (p.ej. ~/rtsp-server-tsst); si no, /opt/race-control-server. Se puede forzar con APP_DIR=...
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "$APP_DIR" ]; then
+    if [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/server.js" ]; then
+        APP_DIR="$SCRIPT_DIR"
+    else
+        APP_DIR="/opt/race-control-server"
+    fi
+fi
 SERVICE_NAME="race-control"
+# La copia puede ser de otro usuario (carpeta personal): git no la rechaza como root
+git() { command git -c safe.directory="$APP_DIR" "$@"; }
 REPO_URL="https://github.com/tossalet/rtsp-server-tsst"
 WEB_PORT=4000
 GRAFANA_PORT=4001 # panel + 1
@@ -83,7 +94,7 @@ else
     echo "   Clonando repositorio desde GitHub..."
     git clone "$REPO_URL" "$APP_DIR" || fail "clonando el repositorio"
 fi
-echo "✅ Código en la versión $(git -C "$APP_DIR" log -1 --format='%h (%ad)' --date=short)."
+echo "✅ Código en la versión $(git -C "$APP_DIR" log -1 --format='%h (%ad)' --date=short) en $APP_DIR"
 
 # Base de datos: versiones antiguas usaban onpremise.db; la app usa race-control.db
 mkdir -p "$APP_DIR/data"
@@ -100,6 +111,12 @@ npm ci --omit=dev || npm install --omit=dev || fail "instalando dependencias npm
 node -e "require('sqlite3'); require('express'); require('socket.io'); require('systeminformation')" \
     || fail "las dependencias npm no cargan correctamente"
 echo "✅ Dependencias npm instaladas."
+# Si la carpeta es de un usuario (p.ej. ~/rtsp-server-tsst), se le devuelve la propiedad
+# para que pueda seguir usando git sin sudo. El servicio corre como root y lee igual.
+APP_OWNER="$(stat -c %U "$APP_DIR")"
+if [ "$APP_OWNER" != "root" ]; then
+    chown -R "$APP_OWNER": "$APP_DIR" 2>/dev/null || true
+fi
 
 # ── 6. Servidor de hora (NTP) para sincronizar las cámaras ────
 echo ""
@@ -250,6 +267,7 @@ echo "============================================================"
 echo ""
 echo "  📍 Panel de control web:"
 echo "  👉 http://$LOCAL_IP:4000"
+echo "  📁 Carpeta del servidor: $APP_DIR"
 echo ""
 if [ "$INSTALL_MONITORING" = "yes" ]; then
     echo "  📈 Grafana (gráficas e historial):"
