@@ -34,6 +34,11 @@ const SUMMARY = {
 
 const cache = new Map(); // range -> { at, data }
 
+// Prometheus guarda también las entradas y salidas ya borradas (hasta 15 días). El panel solo
+// enseña las que existen ahora, y con su nombre actual aunque se hayan renombrado.
+const db = require('./db');
+const dbAll = sql => new Promise(resolve => db.all(sql, [], (err, rows) => resolve(err ? [] : rows)));
+
 async function promQuery(path, params) {
     const url = `${PROMETHEUS_URL}/api/v1/${path}?${new URLSearchParams(params)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -55,9 +60,34 @@ async function collect(range) {
         ...summaryKeys.map(k => promQuery('query', { query: SUMMARY[k].replace('{r}', range), time: end }))
     ]);
 
+    const [inRows, outRows] = await Promise.all([
+        dbAll('SELECT channel, name FROM inputs'),
+        dbAll('SELECT id FROM outputs')
+    ]);
+    const inName = new Map(inRows.map(x => [String(x.channel), x.name || '']));
+    const outIds = new Set(outRows.map(x => String(x.id)));
+    // Series de entrada: tienen channel; de salida: id; las del equipo (CPU, memoria): ninguna
+    const exists = m => m.id !== undefined ? outIds.has(String(m.id))
+        : m.channel !== undefined ? inName.has(String(m.channel)) : true;
+    const relabel = m => (m.channel !== undefined && inName.has(String(m.channel)))
+        ? { ...m, name: inName.get(String(m.channel)) } : m;
+
     const series = {};
     seriesKeys.forEach((k, i) => {
-        series[k] = results[i].map(r => ({ labels: r.metric, values: r.values.map(([t, v]) => [t, Number(v)]) }));
+        // Una entrada renombrada deja dos series en Prometheus: se juntan en una con el nombre actual
+        const merged = new Map();
+        for (const r of results[i]) {
+            if (!exists(r.metric)) continue;
+            const labels = relabel(r.metric);
+            const key = labels.id !== undefined ? 'o' + labels.id : labels.channel !== undefined ? 'i' + labels.channel : JSON.stringify(labels);
+            const values = r.values.map(([t, v]) => [t, Number(v)]);
+            const prev = merged.get(key);
+            if (!prev) { merged.set(key, { labels, values }); continue; }
+            const byT = new Map(prev.values);
+            for (const [t, v] of values) byT.set(t, (byT.get(t) || 0) + v);
+            prev.values = [...byT.entries()].sort((a, b) => a[0] - b[0]);
+        }
+        series[k] = [...merged.values()];
     });
 
     // Resumen agrupado por canal de entrada
@@ -65,13 +95,19 @@ async function collect(range) {
     summaryKeys.forEach((k, i) => {
         for (const r of results[seriesKeys.length + i]) {
             const ch = r.metric.channel;
-            if (!ch) continue;
-            const row = summary[ch] || (summary[ch] = { channel: ch, name: r.metric.name || '' });
-            row[k] = Number(r.value[1]);
+            if (!ch || !inName.has(String(ch))) continue;
+            const row = summary[ch] || (summary[ch] = { channel: ch, name: inName.get(String(ch)) });
+            const v = Number(r.value[1]);
+            // Renombrada a mitad de rango: dos series del mismo canal; se suman reconexiones,
+            // se queda la peor disponibilidad / mínimo y la mayor media (la del tramo con vídeo)
+            if (row[k] === undefined) row[k] = v;
+            else if (k === 'restarts') row[k] += v;
+            else if (k === 'avgBitrate') row[k] = Math.max(row[k], v);
+            else row[k] = Math.min(row[k], v);
         }
     });
 
-    return { available: true, range, step, start: rangeParams.start, end, series, summary: Object.values(summary) };
+    return { available: true, range, step, start: rangeParams.start, end, series, summary: Object.values(summary).sort((a, b) => Number(a.channel) - Number(b.channel)) };
 }
 
 async function handler(req, res) {
