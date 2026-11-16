@@ -107,9 +107,26 @@ fi
 echo ""
 echo "📦 [5/7] Instalando dependencias Node.js..."
 cd "$APP_DIR"
-npm ci --omit=dev || npm install --omit=dev || fail "instalando dependencias npm"
-node -e "require('sqlite3'); require('express'); require('socket.io'); require('systeminformation')" \
-    || fail "las dependencias npm no cargan correctamente"
+# npm ci borra node_modules antes de instalar: se guarda una copia para no dejar el servidor
+# sin dependencias si algo falla (sin internet, error de compilación de sqlite3...).
+rm -rf node_modules.prev
+[ -d node_modules ] && cp -a node_modules node_modules.prev
+deps_ok() { node -e "require('sqlite3'); require('express'); require('socket.io'); require('systeminformation')" 2>/dev/null; }
+restore_deps() {
+    if [ -d node_modules.prev ]; then rm -rf node_modules; mv node_modules.prev node_modules; echo "   Dependencias anteriores restauradas."; fi
+}
+if npm ci --omit=dev --no-audit --no-fund && deps_ok; then
+    :
+elif echo "   Reintentando con npm install..." && npm install --omit=dev --no-audit --no-fund && deps_ok; then
+    :
+elif echo "   Reintentando desde cero (borrando node_modules)..." && rm -rf node_modules && npm install --omit=dev --no-audit --no-fund && deps_ok; then
+    :
+else
+    restore_deps
+    echo "   Detalle del error: $(ls -t /root/.npm/_logs/*-debug-0.log 2>/dev/null | head -1)"
+    fail "instalando dependencias npm (copia el error de arriba)"
+fi
+rm -rf node_modules.prev
 echo "✅ Dependencias npm instaladas."
 # Si la carpeta es de un usuario (p.ej. ~/rtsp-server-tsst), se le devuelve la propiedad
 # para que pueda seguir usando git sin sudo. El servicio corre como root y lee igual.
