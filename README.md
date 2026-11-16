@@ -1,7 +1,7 @@
 # rtsp-server-tsst
 
 Servidor TSST que recibe las cámaras de videovigilancia por **RTSP** y las entrega por **SRT** a Race Control (replay de comisarios).
-Pensado para el mini PC HP EliteDesk 800 G5 (i7-9700, Intel UHD 630) con Debian 12, sin Docker.
+Pensado para el mini PC HP EliteDesk 800 G5 (i7-9700, Intel UHD 630) con Debian 12 o 13, sin Docker.
 
 ## Instalar o actualizar
 

@@ -3,7 +3,7 @@
 # ============================================================
 #   INSTALADOR DIRECTO — RACE CONTROL SERVER (SIN DOCKER)
 #   HP EliteDesk 800 G5 · Intel i7-9700 · UHD 630
-#   Debian 12 (Bookworm)
+#   Debian 12 o 13
 #   Sirve tanto para instalar desde cero como para ACTUALIZAR.
 #   La base de datos (data/), logs/ y media/ nunca se tocan.
 # ============================================================
