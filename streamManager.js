@@ -16,8 +16,39 @@ const inputRate = {}; // canal -> bits/s medidos en Node (último segundo)
 // VAAPI: nivel de respaldo por salida si la GPU falla con ese vídeo.
 // 0 = todo en GPU · 1 = decodifica CPU, escala y codifica GPU · 2 = decodifica y escala CPU, codifica GPU
 const vaapiLevel = {};
+// Qué admite la GPU Intel según `vainfo` (una vez, al arrancar). null = no se sabe: se prueba todo.
+// El driver libre de Debian (intel-media-va-driver) en la UHD 630 no escala (sin VideoProc) y solo
+// codifica H.264 en bajo consumo (EncSliceLP), que FFmpeg solo usa con -low_power 1.
+function parseVaCaps(text) {
+    const set = new Set();
+    for (const m of String(text).matchAll(/VAProfile(\w+)\s*:\s*VAEntrypoint(\w+)/g)) set.add(m[1] + ':' + m[2]);
+    if (!set.size) return null;
+    const has = (prefix, ep) => [...set].some(k => k.startsWith(prefix) && k.endsWith(':' + ep));
+    return {
+        vpp: has('None', 'VideoProc'),
+        decode: { 'H.264': has('H264', 'VLD'), 'H.265': has('HEVC', 'VLD') },
+        encode: { h264_vaapi: has('H264', 'EncSlice'), hevc_vaapi: has('HEVC', 'EncSlice') },
+        encodeLP: { h264_vaapi: has('H264', 'EncSliceLP'), hevc_vaapi: has('HEVC', 'EncSliceLP') }
+    };
+}
+let vaCaps = null;
+if (os.platform() === 'linux' && fs.existsSync('/dev/dri/renderD128')) {
+    try {
+        const r = require('child_process').spawnSync('vainfo', ['--display', 'drm', '--device', '/dev/dri/renderD128'], { encoding: 'utf8', timeout: 5000 });
+        vaCaps = parseVaCaps((r.stdout || '') + (r.stderr || ''));
+    } catch (e) { vaCaps = null; }
+}
+const vaapiLowPower = {}; // salida -> true si FFmpeg pidió el codificador de bajo consumo (sin vainfo)
+function logGpuCaps() {
+    if (!vaCaps) return;
+    const yn = b => b ? 'sí' : 'no';
+    console.log(`[GPU] VAAPI: decodifica H.264 ${yn(vaCaps.decode['H.264'])}, H.265 ${yn(vaCaps.decode['H.265'])} · ` +
+        `escala ${yn(vaCaps.vpp)} · codifica H.264 ${vaCaps.encode.h264_vaapi ? 'sí' : vaCaps.encodeLP.h264_vaapi ? 'solo en bajo consumo' : 'no'}` +
+        (vaCaps.vpp ? '' : ' (driver libre: con intel-media-va-driver-non-free también escala en GPU)'));
+}
+
 // Errores de la GPU. No vale "vaapi" a secas: la línea "Stream mapping ... (h264_vaapi)" sale también cuando funciona.
-const VAAPI_HW_ERROR = /hardware accelerator failed|scale_vaapi|hwupload|VAProfile|VA_STATUS|hw_frames|hwaccel.*(?:fail|error|not)|Failed setup|Impossible to convert|Device creation failed|No VA display|vaapi.*(?:error|failed|not supported)/i;
+const VAAPI_HW_ERROR = /hardware accelerator failed|No usable encoding entrypoint|scale_vaapi|hwupload|VAProfile|VA_STATUS|hw_frames|hwaccel.*(?:fail|error|not)|Failed setup|Impossible to convert|Device creation failed|No VA display|vaapi.*(?:error|failed|not supported)/i;
 
 // Distribución en memoria: cada canal tiene un "hub" (Set de stdin de FFmpeg).
 // El input escribe por stdout (pipe) y Node reparte los chunks a los stdin de outputs/preview.
@@ -551,7 +582,14 @@ function startOutput(outputObj) {
     // Si el driver no puede con ese vídeo, baja solo de nivel (vaapiLevel): primero decodifica la CPU,
     // y si tampoco escala la GPU (VPP), escala la CPU. La codificación siempre sigue en la GPU.
     let level = isVAAPI ? (vaapiLevel[id] || 0) : 0;
+    // Si vainfo ya dice que algo no se puede, no se intenta (ahorra los ~6 s de cada intento fallido)
+    if (isVAAPI && vaCaps) {
+        if (srcVideo && vaCaps.decode[srcVideo.codec] === false) level = Math.max(level, 1);
+        if (!vaCaps.vpp && (doScale || src10bit)) level = Math.max(level, 2);
+    }
     if (level === 1 && !doScale && !src10bit) level = 2; // sin escalar, 1 y 2 son lo mismo
+    // Solo codificador de bajo consumo (VDEnc): FFmpeg no lo usa si no se le pide
+    const lowPower = isVAAPI && (!!vaapiLowPower[id] || (!!vaCaps && !vaCaps.encode[vcodec] && !!vaCaps.encodeLP[vcodec]));
     const gpuDecode = isVAAPI && level === 0;
     const gpuScale = isVAAPI && level <= 1;
 
@@ -580,10 +618,12 @@ function startOutput(outputObj) {
             vf = (doScale ? `scale=-2:${scaleH}:flags=bilinear,` : '') + 'format=nv12,hwupload';
         }
         pipeline = gpuDecode ? 'GPU' : gpuScale ? 'CPU+GPU' : 'CPU+GPUenc';
-        const desc = { GPU: 'decodifica, escala y codifica en GPU', 'CPU+GPU': 'decodifica CPU, escala y codifica GPU', 'CPU+GPUenc': 'decodifica y escala CPU, codifica GPU' }[pipeline];
-        console.log(`[HW-ACCEL] VAAPI ${desc}${doScale ? ', a ' + scaleH + 'p' : ''} -> ${vcodec}`);
+        const desc = { GPU: doScale ? 'decodifica, escala y codifica en GPU' : 'decodifica y codifica en GPU', 'CPU+GPU': 'decodifica CPU, escala y codifica GPU', 'CPU+GPUenc': 'decodifica y escala CPU, codifica GPU' }[pipeline];
+        console.log(`[HW-ACCEL] VAAPI ${desc}${doScale ? ', a ' + scaleH + 'p' : ''} -> ${vcodec}${lowPower ? ' (bajo consumo)' : ''}`);
         args.push('-vf', vf);
-        args.push('-c:v', vcodec, '-qp', '23', '-g', '50');
+        args.push('-c:v', vcodec);
+        if (lowPower) args.push('-low_power', '1');
+        args.push('-qp', '23', '-g', '50');
         args.push('-c:a', 'copy'); // el audio ya es AAC desde el input
     } else if (isNVENC || isQSV) {
         // NVIDIA NVENC / Intel QSV (CPU decodes, GPU encodes)
@@ -696,6 +736,17 @@ function startOutput(outputObj) {
         const failedFast = Date.now() - state.startedAt < 5000;
         // La GPU falló antes de sacar ni un fotograma: bajar un nivel (no por tiempo: FFmpeg tarda ~5 s
         // en analizar la entrada, así que el fallo llega después de los 5 s de failedFast).
+        // Sin modo normal de codificar: reintentar igual pero con el codificador de bajo consumo
+        if (isVAAPI && !lowPower && !state.encoded && /No usable encoding entrypoint/i.test(state.hwError + ' ' + errTail.text())) {
+            vaapiLowPower[id] = true;
+            console.error(`[OUT-${id}] La GPU solo codifica en bajo consumo; se reintenta con -low_power 1.`);
+            state.autoRestart = setTimeout(() => {
+                if (activeOutputs[id] !== state) return;
+                delete activeOutputs[id];
+                startOutput(outputObj);
+            }, 1000);
+            return;
+        }
         if (isVAAPI && level < 2 && !state.encoded && state.hwError) {
             vaapiLevel[id] = level + 1;
             const next = level === 0 && (doScale || src10bit) ? 'decodificará la CPU (escala y codifica la GPU)'
@@ -728,6 +779,7 @@ function stopOutput(id) {
     console.log(`[STOPPING OUTPUT ${id}] Stopping process...`);
     outp.intentionalStop = true;
     delete vaapiLevel[id]; // al editar o reactivar se vuelve a probar todo en la GPU
+    delete vaapiLowPower[id];
     if (outp.autoRestart) clearTimeout(outp.autoRestart);
     delete pendingStart.output[id];
     if (outp.process && outp.process.exitCode === null) {
@@ -894,6 +946,9 @@ module.exports = {
     getMetricsSnapshot,
     getProcesses,
     parseVideoLine,
+    parseVaCaps,
+    logGpuCaps,
+    _setVaCaps: c => { vaCaps = c; }, // pruebas
     ensureHls,
     HLS_DIR,
     activeInputs,

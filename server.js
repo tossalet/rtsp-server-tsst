@@ -711,6 +711,7 @@ function startListen() {
     server.listen(PORT, '0.0.0.0', () => {
         _listenRetries = 0;
         console.log(`TSST SERVER running on port ${PORT}`);
+        streamManager.logGpuCaps();
     });
 }
 
