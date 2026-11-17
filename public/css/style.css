@@ -632,3 +632,44 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 @keyframes skPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 @keyframes recPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── Resolución que llega, consumo real y codificación de la cámara ── */
+.badge-res {
+    font-size: 0.7rem; font-weight: 700; padding: 4px 8px; border-radius: 4px; letter-spacing: 0.5px; flex-shrink: 0;
+    background: rgba(59, 130, 246, 0.18); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);
+    font-variant-numeric: tabular-nums;
+}
+.badge-res[hidden] { display: none; }
+.vinfo, .use-line { font-size: 0.75rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.vinfo:empty, .use-line:empty { display: none; }
+.vinfo i, .use-line i { color: var(--accent-blue); opacity: 0.8; margin-right: 2px; }
+.output-row .use-line { font-size: 0.70rem; font-family: inherit; }
+.use-line b, .proc-total b { font-weight: 600; color: #e2e8f0; white-space: nowrap; }
+.use-line { overflow-wrap: normal; word-break: normal; }
+.use-line b.warm, .proc-total b.warm { color: var(--color-yellow); }
+.use-line b.hot, .proc-total b.hot { color: var(--color-red); }
+.proc-total {
+    font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;
+    padding: 6px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.proc-total[hidden] { display: none; }
+.proc-total i { color: var(--accent-blue); margin-right: 4px; }
+@media (max-width: 900px) { .proc-total { display: none !important; } }
+
+.action-btn.cam-btn i { color: #93c5fd; }
+#cameraModal fieldset { border: 0; padding: 0; margin: 0; min-width: 0; transition: opacity 0.2s; }
+#cameraModal fieldset:disabled { opacity: 0.45; }
+.cam-ident { font-size: 0.85rem; color: #e2e8f0; margin-bottom: 8px; min-height: 1.3em; line-height: 1.4; }
+.cam-ident small { color: var(--text-muted); }
+.cam-received { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px; }
+.cam-received:empty { display: none; }
+.cam-received i { color: var(--accent-blue); margin-right: 4px; }
+.cam-loading { color: var(--text-muted); }
+.cam-error { color: #fca5a5; }
+.cam-reload { display: flex; align-items: flex-end; }
+.cam-reload .btn-secondary { width: 100%; justify-content: center; }
+.cam-check { display: flex; gap: 8px; align-items: flex-start; font-size: 0.8rem; color: var(--color-yellow); margin: 4px 0 10px; cursor: pointer; }
+.cam-check[hidden] { display: none; }
+.cam-hint { display: block; font-size: 0.75rem; color: var(--text-muted); line-height: 1.45; min-height: 1.1em; }
+#out_scale:disabled { opacity: 0.5; }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }

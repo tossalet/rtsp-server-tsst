@@ -50,6 +50,31 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
   buscador, reproducción, descarga y borrado. Las grabaciones HLS aparecen como una sola entrada (sin sus trozos)
   y lo que se está grabando ahora no se puede borrar.
 
+## Resolución, 4K y consumo
+
+- Cada entrada muestra lo que **llega de verdad** de la cámara: etiqueta en la cabecera (4K, 1080p…) y, al desplegarla,
+  "Llega: H.265 · 3840×2160 · 25 fps".
+- Cada salida muestra cómo sale (copia directa, o códec y `4K → 1080p`) y su **consumo real** de CPU y de la GPU Intel,
+  y cada cámara el total de su entrada, vista previa y salidas. Arriba a la derecha, el total de todo el vídeo.
+  Se mide leyendo `/proc` (el driver i915 apunta el tiempo de GPU de cada proceso): no instala nada y solo
+  trabaja con el panel abierto. Amarillo a partir del 40 %, rojo del 70 %.
+- **Rescalar** (editar salida → "Resolución de salida": 2160p, 1440p, 1080p, 720p) solo es posible transcodificando.
+  Con **Intel VAAPI** el vídeo se decodifica, se escala y se codifica en la GPU integrada (UHD 630), casi sin CPU.
+  Si la GPU no puede decodificar un vídeo concreto, la salida pasa sola a decodificar con CPU y lo indica
+  ("decodifica CPU, codifica GPU"). Nunca se amplía: si la cámara manda menos, sale tal cual.
+  Por CPU (`libx264`) un 4K a 1080p ocupa varios núcleos: usar VAAPI.
+
+## Codificación de la cámara (Hikvision y Dahua)
+
+Botón de deslizadores en cada entrada RTSP: lee y cambia códec, resolución, fps, CBR/VBR, bitrate y GOP del mismo
+stream que usa la entrada (principal o secundario, según la URL). Usa el usuario y la contraseña de la URL RTSP
+(Hikvision por ISAPI, Dahua por CGI, autenticación Digest). Si la web de la cámara no está en el puerto 80,
+se indica en la ventana y queda guardado. Al aplicar, la entrada se reconecta sola con la nueva codificación.
+
+- Recomendado para carreras: **CBR**, GOP de 1–2 s (25–50 a 25 fps) y **sin H.264+/H.265+ (Smart Codec)**,
+  que alarga el GOP y da saltos en el replay. La ventana avisa si está activo.
+- Orientativo: 4K a 12–16 Mbps en H.265 (20–25 en H.264); 1080p a 4–6 Mbps en H.265 (6–8 en H.264).
+
 ## Gráficas con Grafana (opcional)
 
 ```bash

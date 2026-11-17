@@ -633,6 +633,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const codecElem = document.getElementById(`codec-${data.channel}`);
             if (codecElem && data.codec.length > 0) codecElem.innerText = data.codec;
         }
+        if (data.video) setVideoInfo(data.channel, data.video);
 
         // Backend pushes historical telemetry for each update
         if (data.history) {
@@ -650,6 +651,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Render streams list locally on dash
         renderDashboardStreams();
     });
+
+    socket.on('input_video', d => setVideoInfo(d.channel, d.video));
+    socket.on('proc_stats', renderProcStats);
 
     socket.on('sys_stats', (stats) => {
         // CPU
@@ -769,7 +773,8 @@ function renderStreams() {
                             <span class="tooltiptext">${input.enabled ? 'Enabled' : 'Disabled'}</span>
                         </div>
                         <div class="badge-protocol ${protocolBadge}">${protocolText}</div>
-                        <span id="codec-${input.channel}" class="badge-protocol udp" style="background:#4b5563;">H.26X</span>
+                        <span id="codec-${input.channel}" class="badge-protocol udp" style="background:#4b5563;">${videoInfo[input.channel] ? videoInfo[input.channel].codec : 'H.26X'}</span>
+                        <span id="res-${input.channel}" class="badge-res" ${videoInfo[input.channel] ? '' : 'hidden'} title="${videoInfo[input.channel] ? escapeHtml(videoText(videoInfo[input.channel])) : ''}">${videoInfo[input.channel] ? resLabel(videoInfo[input.channel]) : ''}</span>
                         <span class="stream-name" style="display:flex; flex-direction:column; line-height:1.2;">
                             ${input.name || 'Channel ' + input.channel}
                             <span style="font-size:0.70rem; color:var(--accent-blue); font-family:monospace; font-weight:normal; user-select:all;">${displayUrl(input.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
@@ -793,6 +798,7 @@ function renderStreams() {
                                 <i class="fa-solid ${input.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}"></i>
                                 <span class="tooltiptext">Toggle Input</span>
                             </button>
+                            ${/^rtsp:\/\//i.test(input.url) ? `<button class="action-btn cam-btn tooltip" onclick="openCameraModal(${input.channel})" aria-label="Codificación de la cámara"><i class="fa-solid fa-sliders"></i><span class="tooltiptext">Codificación de la cámara</span></button>` : ''}
                             <button class="action-btn edit-btn" onclick="openEditInput(${input.channel})"><i class="fa-solid fa-pen"></i></button>
                             <button class="action-btn delete-btn" onclick="deleteInput(${input.channel})"><i class="fa-solid fa-trash"></i></button>
                             <button class="btn-secondary add-output" onclick="openOutputModal(${input.channel})"><i class="fa-solid fa-arrow-right-to-bracket"></i> Add Output</button>
@@ -812,6 +818,8 @@ function renderStreams() {
                             <p><strong>URL Origen:</strong></p>
                             <span style="color:#fff; font-weight:600; font-family:monospace; word-break: break-all;">${displayUrl(input.url)}</span>
                             <span style="font-size:0.75rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${input.latency_ms ? input.latency_ms + ' ms' : 'auto'}${input.buffer ? ' · Buffer ' + input.buffer + ' MB' : ''}</span>
+                            <span class="vinfo" id="vinfo-${input.channel}">${videoInfo[input.channel] ? '<i class="fa-solid fa-film"></i> Llega: ' + escapeHtml(videoText(videoInfo[input.channel])) : ''}</span>
+                            <span class="use-line" id="use-in-${input.channel}"></span>
                         </div>
                     </div>
                     ${inputOutputs.map(out => `
@@ -825,6 +833,7 @@ function renderStreams() {
                                     ${out.location || displayUrl(out.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}
                                     <span style="font-size:0.70rem; color:var(--text-muted); font-family:monospace; font-weight:normal; user-select:all;">${displayUrl(out.url).replace(/127\.0\.0\.1|0\.0\.0\.0/g, serverIp)}</span>
                                     ${out.url.startsWith('srt') ? `<span style="font-size:0.70rem; color:var(--accent-blue); font-weight:600;"><i class="fa-solid fa-hourglass-half"></i> Latencia ${srtLatencyMs(out.url)} ms</span>` : ''}
+                                    <span class="use-line" id="use-out_${out.id}">${outputUseText(out, lastProcStats && lastProcStats.outputs ? lastProcStats.outputs[out.id] : null)}</span>
                                 </span>
                             </div>
                             <div class="mid-section">
@@ -1074,6 +1083,7 @@ function openOutputModal(channel) {
     document.getElementById('formOutput').reset();
     document.getElementById('out_srt_extra').value = ''; // reset() no limpia los hidden
     updateOutputFields();
+    updateScaleHint();
     openModal('outputModal');
 }
 
@@ -1411,6 +1421,9 @@ function openEditOutput(id) {
     document.getElementById('out_srt_extra').value = '';
     document.getElementById('out_location').value = out.location;
     document.getElementById('out_vcodec').value = out.vcodec || 'copy';
+    document.getElementById('out_channel').value = out.channel;
+    document.getElementById('out_scale').value = String(out.scale || 0);
+    updateScaleHint();
     
     // Parse url broadly
     if (out.url.startsWith('srt')) {
@@ -1551,7 +1564,8 @@ async function submitOutput(e) {
         channel: parseInt(document.getElementById('out_channel').value),
         url: outUrl,
         location: document.getElementById('out_location').value,
-        vcodec: document.getElementById('out_vcodec').value || 'copy'
+        vcodec: document.getElementById('out_vcodec').value || 'copy',
+        scale: parseInt(document.getElementById('out_scale').value, 10) || 0
     };
 
     const isEdit = document.getElementById('out_is_edit').value === 'true';
@@ -1695,5 +1709,209 @@ async function toggleOutput(id) {
 async function deleteOutput(id) {
     if(confirm('Are you sure you want to delete this output?')) {
         await fetch(`/api/outputs/${id}`, { method: 'DELETE' });
+    }
+}
+
+/* =======================================
+ *  RESOLUCIÓN QUE LLEGA Y CONSUMO REAL (CPU / GPU Intel)
+ * ======================================= */
+const videoInfo = {}; // canal -> { codec, width, height, fps, bits }
+let lastProcStats = null;
+
+function resLabel(v) {
+    if (v.height >= 2160) return '4K';
+    return v.height + 'p';
+}
+function videoText(v) {
+    return `${v.codec} · ${v.width}×${v.height}${v.fps ? ' · ' + v.fps + ' fps' : ''}${v.bits > 8 ? ' · ' + v.bits + ' bits' : ''}`;
+}
+function setVideoInfo(channel, v) {
+    if (!v) return;
+    const prev = videoInfo[channel];
+    videoInfo[channel] = v;
+    if (prev && prev.width === v.width && prev.height === v.height && prev.fps === v.fps && prev.codec === v.codec) return;
+    const badge = document.getElementById(`res-${channel}`);
+    if (badge) { badge.hidden = false; badge.textContent = resLabel(v); badge.title = videoText(v); }
+    const codec = document.getElementById(`codec-${channel}`);
+    if (codec) codec.textContent = v.codec;
+    const line = document.getElementById(`vinfo-${channel}`);
+    if (line) line.innerHTML = '<i class="fa-solid fa-film"></i> Llega: ' + escapeHtml(videoText(v));
+    // Las salidas de esa cámara muestran a qué resolución salen
+    outputs.filter(o => String(o.channel) === String(channel)).forEach(o => {
+        const el = document.getElementById(`use-out_${o.id}`);
+        if (el) el.innerHTML = outputUseText(o, lastProcStats && lastProcStats.outputs ? lastProcStats.outputs[o.id] : null);
+    });
+}
+
+const fmtPct = x => (x < 10 ? x.toFixed(1) : Math.round(x)) + ' %';
+const useClass = x => x >= 70 ? 'hot' : x >= 40 ? 'warm' : '';
+
+function outputUseText(o, u) {
+    const vcodec = o.vcodec || 'copy';
+    const src = videoInfo[o.channel];
+    let what;
+    if (vcodec === 'copy') {
+        what = 'Copia directa' + (src ? ' · ' + resLabel(src) : '');
+    } else {
+        const target = o.scale && !(src && src.height <= o.scale) ? o.scale + 'p' : (src ? resLabel(src) : 'sin rescalar');
+        const pipe = u && u.pipeline ? ({ GPU: 'todo en GPU', 'CPU+GPU': 'decodifica CPU, codifica GPU', CPU: 'CPU' }[u.pipeline] || '') : '';
+        what = `${OUTPUT_CODECS[vcodec] || vcodec} · ${src && target !== resLabel(src) ? resLabel(src) + ' → ' : ''}${target}${pipe ? ' · ' + pipe : ''}`;
+    }
+    if (!u) return `<i class="fa-solid fa-microchip"></i> ${escapeHtml(what)}`;
+    const gpuTitle = `GPU Intel · vídeo (decodificar/codificar) ${u.gpuDetail.video} % · render (escalar) ${u.gpuDetail.render} % · VPP ${u.gpuDetail.enhance} %`;
+    return `<i class="fa-solid fa-microchip"></i> ${escapeHtml(what)} · <b class="${useClass(u.cpu)}">CPU ${fmtPct(u.cpu)}</b>` +
+        (vcodec === 'copy' ? '' : ` · <b class="${useClass(u.gpu)}" title="${gpuTitle}">GPU ${fmtPct(u.gpu)}</b>`);
+}
+
+function renderProcStats(d) {
+    if (!d || !d.supported) return;
+    lastProcStats = d;
+    outputs.forEach(o => {
+        const el = document.getElementById(`use-out_${o.id}`);
+        if (el) el.innerHTML = outputUseText(o, d.outputs[o.id]);
+    });
+    inputs.forEach(i => {
+        const el = document.getElementById(`use-in-${i.channel}`);
+        if (!el) return;
+        const c = d.channels[i.channel];
+        el.innerHTML = c ? `<i class="fa-solid fa-gauge"></i> Consumo de esta cámara: <b class="${useClass(c.cpu)}">CPU ${fmtPct(c.cpu)}</b> · <b class="${useClass(c.gpu)}">GPU ${fmtPct(c.gpu)}</b>` : '';
+    });
+    const tot = document.getElementById('proc-total');
+    if (tot) {
+        tot.hidden = false;
+        tot.innerHTML = `<i class="fa-solid fa-microchip"></i> Vídeo (FFmpeg): <b class="${useClass(d.total.cpu)}">CPU ${fmtPct(d.total.cpu)}</b> · <b class="${useClass(d.total.gpu)}" title="Motor de vídeo ${d.total.gpuDetail.video} % · render ${d.total.gpuDetail.render} %">GPU Intel ${fmtPct(d.total.gpu)}</b>`;
+    }
+}
+
+// Rescalar solo tiene sentido transcodificando
+function updateScaleHint() {
+    const vcodec = document.getElementById('out_vcodec').value || 'copy';
+    const sel = document.getElementById('out_scale');
+    const hint = document.getElementById('out_scale_hint');
+    const src = videoInfo[document.getElementById('out_channel').value];
+    sel.disabled = vcodec === 'copy';
+    if (vcodec === 'copy') { sel.value = '0'; hint.textContent = 'Para rescalar hay que transcodificar: elige un códec, mejor Intel VAAPI.'; return; }
+    const srcTxt = src ? `La cámara manda ${src.width}×${src.height}. ` : '';
+    if (/_vaapi$/.test(vcodec)) hint.textContent = srcTxt + 'Intel VAAPI decodifica, escala y codifica en la GPU integrada, casi sin CPU. El consumo real aparece en la salida.';
+    else if (/^lib/.test(vcodec)) hint.textContent = srcTxt + 'Por CPU: un 4K a 1080p puede ocupar varios núcleos. Mejor Intel VAAPI.';
+    else hint.textContent = srcTxt;
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const v = document.getElementById('out_vcodec');
+    if (v) v.addEventListener('change', updateScaleHint);
+});
+
+/* =======================================
+ *  CODIFICACIÓN DE LA CÁMARA (Hikvision ISAPI / Dahua CGI)
+ * ======================================= */
+let camInfo = null;
+
+function openCameraModal(channel) {
+    const input = inputs.find(i => String(i.channel) === String(channel));
+    if (!input) return;
+    document.getElementById('cam_channel').value = channel;
+    document.getElementById('cam_http_port').value = input.cam_http_port || 80;
+    document.querySelector('#cameraModal .modal-header h3').textContent = 'Codificación · ' + (input.name || 'Canal ' + channel);
+    const v = videoInfo[channel];
+    document.getElementById('cam_received').innerHTML = v ? '<i class="fa-solid fa-film"></i> Llega ahora al servidor: <b>' + escapeHtml(videoText(v)) + '</b>' : '';
+    openModal('cameraModal');
+    loadCamera();
+}
+
+function setCamBusy(html) {
+    camInfo = null;
+    document.getElementById('cam_fields').disabled = true;
+    document.getElementById('cam_submit').disabled = true;
+    document.getElementById('cam_ident').innerHTML = html;
+}
+
+async function loadCamera() {
+    const ch = document.getElementById('cam_channel').value;
+    const port = parseInt(document.getElementById('cam_http_port').value, 10) || 80;
+    setCamBusy('<span class="cam-loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Preguntando a la cámara…</span>');
+    let ok = false, d;
+    try {
+        const r = await fetch(`/api/inputs/${ch}/camera?port=${port}`);
+        ok = r.ok;
+        d = await r.json();
+    } catch (e) { d = { error: 'Sin respuesta del servidor' }; }
+    if (document.getElementById('cam_channel').value !== ch) return; // se abrió otra cámara mientras tanto
+    if (!ok) {
+        document.getElementById('cam_ident').innerHTML = '<span class="cam-error"><i class="fa-solid fa-triangle-exclamation"></i> ' + escapeHtml(d.error || 'Error') + '</span>';
+        return;
+    }
+    camInfo = d;
+    const inp = inputs.find(i => String(i.channel) === ch);
+    if (inp) inp.cam_http_port = d.httpPort;
+    document.getElementById('cam_ident').innerHTML = `<b>${escapeHtml(d.brand)}</b> ${escapeHtml(d.model)} · ${escapeHtml(d.stream)}` +
+        (d.firmware ? `<br><small>Firmware ${escapeHtml(d.firmware)}</small>` : '');
+
+    const c = d.current, caps = d.caps;
+    const fill = (id, values, current, label) => {
+        const list = [...values];
+        if (current !== '' && current !== null && current !== undefined && !list.map(String).includes(String(current))) list.unshift(current);
+        const el = document.getElementById(id);
+        el.innerHTML = list.map(v => `<option value="${escapeHtml(String(v))}">${escapeHtml(label ? label(v) : String(v))}</option>`).join('');
+        el.value = String(current);
+    };
+    const area = r => r.split('x').reduce((a, b) => a * b, 1);
+    const resName = r => { const h = Number(r.split('x')[1]); return r.replace('x', '×') + (h >= 2160 ? ' (4K)' : h === 1080 ? ' (Full HD)' : h === 720 ? ' (HD)' : ''); };
+    fill('cam_codec', caps.codecs.length ? caps.codecs : ['H.264', 'H.265'], c.codec);
+    fill('cam_res', [...caps.resolutions].sort((a, b) => area(b) - area(a)), c.width && c.height ? `${c.width}x${c.height}` : '', resName);
+    fill('cam_fps', [...new Set(caps.fps.length ? caps.fps : [25, 30, 50, 60])].sort((a, b) => b - a), c.fps, f => f + ' fps');
+    document.getElementById('cam_rc').value = c.rc === 'VBR' ? 'VBR' : 'CBR';
+    const br = document.getElementById('cam_bitrate');
+    br.max = caps.bitrateMax || 32768;
+    br.value = c.bitrate || 8192;
+    const gop = document.getElementById('cam_gop');
+    gop.max = caps.gopMax || 400;
+    gop.value = c.gop || 50;
+    document.getElementById('cam_smart_row').hidden = c.smartCodec !== true;
+    document.getElementById('cam_smart').checked = c.smartCodec === true;
+    document.getElementById('cam_fields').disabled = false;
+    document.getElementById('cam_submit').disabled = false;
+    updateCameraHints();
+}
+
+function updateCameraHints() {
+    const fps = parseFloat(document.getElementById('cam_fps').value) || 25;
+    const gop = parseInt(document.getElementById('cam_gop').value, 10) || 0;
+    const h = parseInt((document.getElementById('cam_res').value || '').split('x')[1], 10) || 0;
+    const sec = gop / fps;
+    const tips = [];
+    if (gop) tips.push(`Un keyframe cada ${sec.toFixed(sec < 10 ? 1 : 0)} s.` +
+        (sec > 2 ? ` Para replay y para que Race Control y vMix enganchen rápido, mejor 1–2 s (GOP ${Math.round(fps)}–${Math.round(2 * fps)}).` : ''));
+    if (h >= 2160) tips.push('4K: 12–16 Mbps en H.265 o 20–25 Mbps en H.264.');
+    else if (h >= 1080) tips.push('1080p: 4–6 Mbps en H.265 o 6–8 Mbps en H.264.');
+    document.getElementById('cam_hint').textContent = tips.join(' ');
+}
+
+async function submitCamera(e) {
+    e.preventDefault();
+    if (!camInfo) return;
+    const ch = document.getElementById('cam_channel').value;
+    const [width, height] = (document.getElementById('cam_res').value || 'x').split('x').map(Number);
+    const body = {
+        httpPort: parseInt(document.getElementById('cam_http_port').value, 10) || 80,
+        codec: document.getElementById('cam_codec').value,
+        width, height,
+        fps: parseFloat(document.getElementById('cam_fps').value),
+        rc: document.getElementById('cam_rc').value,
+        bitrate: parseInt(document.getElementById('cam_bitrate').value, 10),
+        gop: parseInt(document.getElementById('cam_gop').value, 10),
+        smartCodec: camInfo.current.smartCodec === true && !document.getElementById('cam_smart').checked ? false : undefined
+    };
+    const btn = document.getElementById('cam_submit');
+    btn.disabled = true;
+    try {
+        const r = await fetch(`/api/inputs/${ch}/camera`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { toast(d.error || 'La cámara no aceptó el cambio'); btn.disabled = false; return; }
+        delete videoInfo[ch]; // la nueva resolución se verá al reconectar
+        closeModal('cameraModal');
+        toast(d.rebootRequired ? 'Aplicado. La cámara pide reiniciarse para terminar el cambio.' : 'Aplicado en la cámara. La entrada se reconecta con la nueva codificación.', 'success', 4500);
+    } catch (err) {
+        toast('Sin respuesta del servidor');
+        btn.disabled = false;
     }
 }

@@ -40,6 +40,7 @@
                     <p id="topbar-subtitle">Live endpoints control panel</p>
                 </div>
                 <div class="topbar-actions">
+                    <span class="proc-total" id="proc-total" hidden aria-live="off" title="Consumo de todos los procesos de vídeo del servidor"></span>
                     <div class="view-toggle" id="view-toggle" role="group" aria-label="Vista de las señales" hidden>
                         <button type="button" data-view="list" aria-pressed="true" title="Filas" onclick="setStreamsView('list')"><i class="fa-solid fa-list"></i></button>
                         <button type="button" data-view="grid" aria-pressed="false" title="Mosaico" onclick="setStreamsView('grid')"><i class="fa-solid fa-table-cells-large"></i></button>
@@ -324,6 +325,77 @@
         </div>
     </div>
 
+    <!-- Ajustes de codificación de la cámara (Hikvision ISAPI / Dahua CGI) -->
+    <div class="modal-overlay" id="cameraModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Codificación de la cámara</h3>
+                <button class="close-btn" onclick="closeModal('cameraModal')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="formCamera" onsubmit="submitCamera(event)">
+                <input type="hidden" id="cam_channel" value="">
+                <div class="cam-ident" id="cam_ident" aria-live="polite"></div>
+                <div class="cam-received" id="cam_received"></div>
+                <div class="form-group row">
+                    <div class="half">
+                        <label for="cam_http_port">Puerto web de la cámara</label>
+                        <input type="number" id="cam_http_port" min="1" max="65535" value="80" title="Puerto HTTP de la cámara (80 normalmente; 443 si solo admite HTTPS)">
+                    </div>
+                    <div class="half cam-reload">
+                        <button type="button" class="btn-secondary" onclick="loadCamera()"><i class="fa-solid fa-rotate"></i> Leer de la cámara</button>
+                    </div>
+                </div>
+                <fieldset id="cam_fields" disabled>
+                    <div class="form-group row">
+                        <div class="half">
+                            <label for="cam_codec">Códec</label>
+                            <select id="cam_codec" class="form-control"></select>
+                        </div>
+                        <div class="half">
+                            <label for="cam_res">Resolución</label>
+                            <select id="cam_res" class="form-control" onchange="updateCameraHints()"></select>
+                        </div>
+                    </div>
+                    <div class="form-group row">
+                        <div class="half">
+                            <label for="cam_fps">Fotogramas por segundo</label>
+                            <select id="cam_fps" class="form-control" onchange="updateCameraHints()"></select>
+                        </div>
+                        <div class="half">
+                            <label for="cam_gop">GOP (fotogramas entre keyframes)</label>
+                            <input type="number" id="cam_gop" min="1" max="400" oninput="updateCameraHints()">
+                        </div>
+                    </div>
+                    <div class="form-group row">
+                        <div class="half">
+                            <label for="cam_rc">Control de bitrate</label>
+                            <select id="cam_rc" class="form-control">
+                                <option value="CBR">CBR (constante, recomendado)</option>
+                                <option value="VBR">VBR (variable)</option>
+                            </select>
+                        </div>
+                        <div class="half">
+                            <label for="cam_bitrate">Bitrate (kbps)</label>
+                            <input type="number" id="cam_bitrate" min="256" max="32768" step="256" list="cam_bitrate_list">
+                            <datalist id="cam_bitrate_list">
+                                <option value="4096"></option><option value="6144"></option><option value="8192"></option>
+                                <option value="12288"></option><option value="16384"></option>
+                            </datalist>
+                        </div>
+                    </div>
+                    <label class="cam-check" id="cam_smart_row" hidden>
+                        <input type="checkbox" id="cam_smart"> H.264+/H.265+ (Smart Codec) activo — desmárcalo: cambia el GOP solo y da saltos en el replay
+                    </label>
+                    <small class="cam-hint" id="cam_hint"></small>
+                </fieldset>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" onclick="closeModal('cameraModal')">Cerrar</button>
+                    <button type="submit" class="btn-primary" id="cam_submit" disabled>Aplicar en la cámara</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="outputModal">
         <div class="modal">
             <div class="modal-header">
@@ -395,6 +467,17 @@
                         </select>
                         <small style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;">Las opciones GPU usan aceleración de hardware y consumen mínima CPU. Requieren gráfica compatible.</small>
                     </div>
+                </div>
+                <div class="form-group" id="out_scale_group">
+                    <label for="out_scale">Resolución de salida</label>
+                    <select id="out_scale" class="form-control">
+                        <option value="0" selected>La de la cámara (sin rescalar)</option>
+                        <option value="2160">2160p (4K)</option>
+                        <option value="1440">1440p</option>
+                        <option value="1080">1080p (Full HD)</option>
+                        <option value="720">720p</option>
+                    </select>
+                    <small id="out_scale_hint" style="color:var(--text-muted); font-size:0.75rem; margin-top:5px; display:block;"></small>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary" onclick="closeModal('outputModal')">Cancel</button>

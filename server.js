@@ -9,6 +9,8 @@ const util = require('util');
 const db = require('./db');
 const streamManager = require('./streamManager');
 const sysMonitor = require('./sysMonitor');
+const cameraApi = require('./cameraApi');
+const procStats = require('./procStats');
 const si = require('systeminformation');
 
 const app = express();
@@ -245,6 +247,46 @@ app.post('/api/inputs/:channel/preview', (req, res) => {
     });
 });
 
+/* Ajustes de codificación de la cámara (Hikvision / Dahua). Credenciales: las de la URL RTSP guardada. */
+const OUTPUT_SCALES = [0, 2160, 1440, 1080, 720];
+const parseScale = v => OUTPUT_SCALES.includes(parseInt(v, 10)) ? parseInt(v, 10) : 0;
+const parseHttpPort = v => { const n = parseInt(v, 10); return n >= 1 && n <= 65535 ? n : 0; };
+
+app.get('/api/inputs/:channel/camera', (req, res) => {
+    db.get('SELECT url, cam_http_port FROM inputs WHERE channel = ?', [req.params.channel], async (err, row) => {
+        if (err || !row) return res.status(404).json({ error: 'Entrada no encontrada' });
+        const port = parseHttpPort(req.query.port) || row.cam_http_port || 80;
+        try {
+            const info = await cameraApi.readSettings(row.url, port);
+            if (port !== row.cam_http_port) db.run('UPDATE inputs SET cam_http_port = ? WHERE channel = ?', [port, req.params.channel]);
+            res.json({ ...info, httpPort: port });
+        } catch (e) {
+            res.status(e.status || 502).json({ error: e.message, httpPort: port });
+        }
+    });
+});
+
+app.put('/api/inputs/:channel/camera', (req, res) => {
+    const channelId = req.params.channel;
+    db.get('SELECT * FROM inputs WHERE channel = ?', [channelId], async (err, row) => {
+        if (err || !row) return res.status(404).json({ error: 'Entrada no encontrada' });
+        const port = parseHttpPort(req.body.httpPort) || row.cam_http_port || 80;
+        try {
+            const r = await cameraApi.writeSettings(row.url, port, req.body);
+            const a = r.applied;
+            console.log(`[CAM-${channelId}] Codificación cambiada: ${a.codec} ${a.width}x${a.height} ${a.fps} fps ${a.rc} ${a.bitrate} kbps GOP ${a.gop}`);
+            // La cámara reinicia su stream: reconectar ya para leer la nueva resolución (las salidas siguen suscritas)
+            if (row.enabled) {
+                streamManager.stopInput(channelId);
+                setTimeout(() => streamManager.startInput(row), 1500);
+            }
+            res.json({ ok: true, rebootRequired: r.rebootRequired });
+        } catch (e) {
+            res.status(e.status || 502).json({ error: e.message });
+        }
+    });
+});
+
 app.post('/api/inputs/:channel/snapshot', (req, res) => {
     const channelId = req.params.channel;
     const inp = streamManager.activeInputs[channelId];
@@ -324,7 +366,7 @@ app.get('/api/outputs', (req, res) => {
 });
 
 app.post('/api/outputs', (req, res) => {
-    const { channel, url, location, remote, enabled, vcodec } = req.body;
+    const { channel, url, location, remote, enabled, vcodec, scale } = req.body;
     if (!channel) return res.status(400).json({ error: "Input 'channel' is required" });
 
     db.get('SELECT channel FROM inputs WHERE channel = ?', [channel], (err, parentRaw) => {
@@ -333,9 +375,10 @@ app.post('/api/outputs', (req, res) => {
         checkPortConflict(url, null, (conflict) => {
         if (conflict) return res.status(409).json({ error: conflict });
 
-        const query = `INSERT INTO outputs (channel, url, location, remote, enabled, udpsrv, vcodec)
-                       VALUES (?, ?, ?, ?, ?, 0, ?)`;
-        const params = [ channel, url || '', location || '', remote || '', enabled !== false ? 1 : 0, vcodec || 'copy' ];
+        const query = `INSERT INTO outputs (channel, url, location, remote, enabled, udpsrv, vcodec, scale)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`;
+        const params = [ channel, url || '', location || '', remote || '', enabled !== false ? 1 : 0, vcodec || 'copy',
+                         (vcodec || 'copy') === 'copy' ? 0 : parseScale(scale) ];
 
         db.run(query, params, function(err) {
             if (err) return res.status(500).json({ error: err.message });
@@ -373,12 +416,13 @@ app.post('/api/outputs/:id/toggle', (req, res) => {
 
 app.put('/api/outputs/:id', (req, res) => {
     const id = req.params.id;
-    const { url, location, vcodec } = req.body;
+    const { url, location, vcodec, scale } = req.body;
     if (!url) return res.status(400).json({ error: 'Missing url' });
     checkPortConflict(url, id, (conflict) => {
         if (conflict) return res.status(409).json({ error: conflict });
 
-        db.run(`UPDATE outputs SET url = ?, location = ?, vcodec = ? WHERE id = ?`, [url, location || '', vcodec || 'copy', id], function(err) {
+        db.run(`UPDATE outputs SET url = ?, location = ?, vcodec = ?, scale = ? WHERE id = ?`,
+               [url, location || '', vcodec || 'copy', (vcodec || 'copy') === 'copy' ? 0 : parseScale(scale), id], function(err) {
             if (err) return res.status(500).json({ error: err.message });
             const changes = this.changes;
 
@@ -615,7 +659,20 @@ db.ready.then(bootActiveStreams);
 
 io.on('connection', (socket) => {
     console.log(`Frontend Connected: ${socket.id}`);
+    // Resolución que ya llega de cada cámara, para no esperar a la siguiente estadística
+    for (const ch in streamManager.activeInputs) {
+        const v = streamManager.activeInputs[ch].video;
+        if (v) socket.emit('input_video', { channel: ch, video: v });
+    }
 });
+
+// Consumo de CPU y GPU de cada FFmpeg cada 2 s, solo con alguien mirando el panel (Linux)
+if (procStats.SUPPORTED) {
+    setInterval(() => {
+        if (!io.engine.clientsCount) return;
+        io.emit('proc_stats', procStats.collect(streamManager.getProcesses()));
+    }, 2000);
+}
 
 // Start Server
 const PORT = process.env.PORT || 4000;

@@ -13,6 +13,7 @@ const telemetryCache = {};
 // Contadores para /metrics (Prometheus). Se mantienen aunque el proceso se reinicie.
 const counters = { inputBytes: {}, inputRestarts: {}, outputRestarts: {} };
 const inputRate = {}; // canal -> bits/s medidos en Node (último segundo)
+const vaapiCpuDecode = {}; // salida -> true si la GPU no pudo decodificar su vídeo (se decodifica con CPU)
 
 // Distribución en memoria: cada canal tiene un "hub" (Set de stdin de FFmpeg).
 // El input escribe por stdout (pipe) y Node reparte los chunks a los stdin de outputs/preview.
@@ -154,6 +155,26 @@ function deferStart(kind, key, obj) {
 
 // Locate FFmpeg binary (handles Windows local download vs Linux global). Se resuelve una sola vez.
 let ffmpegPathCache = null;
+// "Stream #0:0: Video: hevc (Main), yuvj420p(pc, bt709, progressive), 3840x2160 [SAR 1:1 DAR 16:9], 25 fps, 25 tbr"
+function parseVideoLine(text) {
+    const m = text.match(/Stream #\d+:\d+[^\n]*?: Video: ([a-zA-Z0-9_]+)([^\n]*)/);
+    if (!m) return null;
+    const rest = m[2];
+    const res = rest.match(/,\s*(\d{2,5})x(\d{2,5})/);
+    if (!res) return null;
+    const fps = rest.match(/,\s*([\d.]+)\s*fps/) || rest.match(/,\s*([\d.]+)\s*tbr/);
+    let codec = m[1].toUpperCase();
+    if (codec === 'HEVC') codec = 'H.265';
+    else if (codec === 'H264') codec = 'H.264';
+    return {
+        codec,
+        width: parseInt(res[1], 10),
+        height: parseInt(res[2], 10),
+        fps: fps ? Math.round(parseFloat(fps[1]) * 100) / 100 : 0,
+        bits: /p1[02](le|be)?\b|Main 10/i.test(rest) ? 10 : 8
+    };
+}
+
 function getFFmpegPath() {
     if (ffmpegPathCache) return ffmpegPathCache;
     ffmpegPathCache = 'ffmpeg'; // Linux / Docker
@@ -241,6 +262,7 @@ function startInput(inputObj) {
         startedAt: Date.now(),
         gotData: false,
         codec: current ? current.codec : '',
+        video: null, // { codec, width, height, fps, bits }: lo que llega de verdad de la cámara
         intentionalStop: false,
         autoRestart: null,
         prevProcess: current ? current.prevProcess : null // la preview sobrevive a los reinicios del input
@@ -259,22 +281,23 @@ function startInput(inputObj) {
     });
 
     let lastParseTime = 0;
-    let codecFound = false;
+    let header = ''; // cabecera de FFmpeg hasta encontrar la línea del vídeo (puede llegar partida)
 
     child.stderr.on('data', (data) => {
         const out = data.toString();
         errTail.push(out);
 
-        // Extraer codec en cuanto aparezca (suele estar en los primeros chunks)
-        if (!codecFound) {
-            const codecMatch = out.match(/Video:\s*([a-zA-Z0-9_-]+)/);
-            if (codecMatch) {
-                let parsedCodec = codecMatch[1].toUpperCase();
-                if (parsedCodec === 'HEVC') parsedCodec = 'H.265';
-                else if (parsedCodec === 'H264') parsedCodec = 'H.264';
-                state.codec = parsedCodec;
-                codecFound = true;
-            }
+        // Códec, resolución y fps reales de la cámara (línea "Stream #0:0: Video: hevc ..., 3840x2160, 25 fps")
+        if (header !== null) {
+            header += out;
+            const v = parseVideoLine(header);
+            if (v) {
+                state.codec = v.codec;
+                state.video = v;
+                header = null;
+                console.log(`[IN-${channel}] Recibiendo ${v.codec} ${v.width}x${v.height}${v.fps ? ' ' + v.fps + ' fps' : ''}${v.bits > 8 ? ' ' + v.bits + ' bits' : ''}`);
+                if (ioInstance) ioInstance.emit('input_video', { channel, video: v });
+            } else if (header.length > 16384) header = null;
         }
 
         const now = Date.now();
@@ -294,6 +317,7 @@ function startInput(inputObj) {
                 time: timeMatch ? timeMatch[1] : '--:--:--',
                 active: true,
                 codec: state.codec,
+                video: state.video,
                 history: pushTelemetry(channel, parseFloat(brText)) // Payload con curva precargada
             });
         }
@@ -514,26 +538,49 @@ function startOutput(outputObj) {
 
     const args = ['-hide_banner', '-y'];
 
-    // VAAPI requires -vaapi_device BEFORE -i as a global option
-    if (isVAAPI) args.push('-vaapi_device', '/dev/dri/renderD128');
+    // Rescalado (solo al transcodificar): altura de salida, 0 = la de la cámara. Nunca se amplía.
+    const scaleH = vcodec === 'copy' ? 0 : (parseInt(outputObj.scale, 10) || 0);
+    const srcVideo = activeInputs[channel] && activeInputs[channel].video;
+    const doScale = scaleH > 0 && !(srcVideo && srcVideo.height <= scaleH);
+    const src10bit = !!(srcVideo && srcVideo.bits > 8);
+    // VAAPI con decodificación también en la GPU: 4K H.265 -> 1080 H.264 casi sin CPU.
+    // Si el driver no puede decodificar ese vídeo, se vuelve solo a decodificar con CPU (vaapiCpuDecode).
+    const gpuDecode = isVAAPI && !vaapiCpuDecode[id];
+
+    if (isVAAPI && gpuDecode) {
+        args.push('-init_hw_device', 'vaapi=va:/dev/dri/renderD128', '-filter_hw_device', 'va',
+            '-hwaccel', 'vaapi', '-hwaccel_device', 'va', '-hwaccel_output_format', 'vaapi');
+    } else if (isVAAPI) {
+        args.push('-vaapi_device', '/dev/dri/renderD128'); // antes de -i: opción global
+    }
 
     args.push('-fflags', '+genpts', '-thread_queue_size', '4096', '-f', 'mpegts', '-i', 'pipe:0');
 
+    let pipeline = 'copy';
     if (vcodec === 'copy') {
         args.push('-c', 'copy');
     } else if (isVAAPI) {
-        // Intel VAAPI: CPU decodes → NV12 → hwupload to GPU → GPU encodes.
-        // hwupload is MANDATORY. Intel UHD 630 only supports CQP: -qp instead of -b:v.
-        console.log(`[HW-ACCEL] VAAPI encode: CPU→${vcodec} via /dev/dri/renderD128 (CQP mode)`);
-        args.push('-vf', 'format=nv12,hwupload');
+        // Decodifica GPU (o CPU) -> hwupload deja los fotogramas en la GPU -> scale_vaapi -> codifica GPU.
+        // "nv12|vaapi" vale tanto si llegan ya en la GPU como si los decodificó la CPU.
+        // UHD 630 solo admite CQP en VAAPI: -qp en vez de -b:v.
+        let vf = gpuDecode ? 'format=nv12|vaapi,hwupload' : 'format=nv12,hwupload';
+        if (doScale) vf += `,scale_vaapi=w=-2:h=${scaleH}:format=nv12`;
+        else if (gpuDecode && src10bit) vf += ',scale_vaapi=format=nv12'; // 10 bits -> 8 bits para H.264
+        pipeline = gpuDecode ? 'GPU' : 'CPU+GPU';
+        console.log(`[HW-ACCEL] VAAPI ${gpuDecode ? 'decodifica y codifica en GPU' : 'decodifica CPU, codifica GPU'}${doScale ? ', escala a ' + scaleH + 'p' : ''} -> ${vcodec}`);
+        args.push('-vf', vf);
         args.push('-c:v', vcodec, '-qp', '23', '-g', '50');
         args.push('-c:a', 'copy'); // el audio ya es AAC desde el input
     } else if (isNVENC || isQSV) {
         // NVIDIA NVENC / Intel QSV (CPU decodes, GPU encodes)
         console.log(`[HW-ACCEL] ${isNVENC ? 'NVENC' : 'QSV'} encode: CPU→${vcodec}`);
+        if (doScale) args.push('-vf', `scale=-2:${scaleH}:flags=bilinear`);
+        pipeline = 'CPU+GPU';
         args.push('-c:v', vcodec, '-b:v', '4M', '-g', '50');
         args.push('-c:a', 'copy');
     } else {
+        pipeline = 'CPU';
+        if (doScale) args.push('-vf', `scale=-2:${scaleH}:flags=bilinear`);
         args.push('-c:v', vcodec);
         args.push('-preset', 'ultrafast');
         args.push('-crf', '23');
@@ -569,7 +616,8 @@ function startOutput(outputObj) {
     subscribe(channel, child.stdin, `salida ${id} (${maskCredentials(url)})`);
     const errTail = makeStderrTail();
 
-    const state = { process: child, parentChannel: channel, outputObj, startedAt: Date.now(), lastUpdate: Date.now(), intentionalStop: false, autoRestart: null };
+    const state = { process: child, parentChannel: channel, outputObj, startedAt: Date.now(), lastUpdate: Date.now(), intentionalStop: false, autoRestart: null,
+        pipeline, scaleTo: doScale ? scaleH : 0 };
     activeOutputs[id] = state;
 
     child.on('error', (err) => {
@@ -623,6 +671,17 @@ function startOutput(outputObj) {
         // Muerte inmediata = fallo de configuración (puerto ocupado, URL mala): esperar más y enseñar el error.
         // Si llevaba un rato, lo normal es que el receptor (Race Control) se haya desconectado: reabrir rápido.
         const failedFast = Date.now() - state.startedAt < 5000;
+        // La GPU no pudo decodificar este vídeo (perfil no soportado...): seguir decodificando con CPU
+        if (failedFast && gpuDecode && /vaapi|hwaccel|hw_frames|hwupload|VA_STATUS|Failed setup|Impossible to convert/i.test(errTail.text())) {
+            vaapiCpuDecode[id] = true;
+            console.error(`[OUT-${id}] La GPU no decodifica este vídeo; se decodificará con CPU. FFmpeg: ${maskCredentials(errTail.text())}`);
+            state.autoRestart = setTimeout(() => {
+                if (activeOutputs[id] !== state) return;
+                delete activeOutputs[id];
+                startOutput(outputObj);
+            }, 1000);
+            return;
+        }
         const delay = failedFast ? OUTPUT_FAIL_RESTART_MS : OUTPUT_RESTART_MS;
         if (failedFast) console.error(`[OUT-${id}] FFmpeg: ${maskCredentials(errTail.text()) || 'sin detalle'}`);
         console.log(`[OUT-${id}] Receptor desconectado o fallo. Reiniciando salida en ${delay / 1000}s...`);
@@ -642,6 +701,7 @@ function stopOutput(id) {
     if (!outp) return false;
     console.log(`[STOPPING OUTPUT ${id}] Stopping process...`);
     outp.intentionalStop = true;
+    delete vaapiCpuDecode[id]; // al editar o reactivar se vuelve a probar la GPU
     if (outp.autoRestart) clearTimeout(outp.autoRestart);
     delete pendingStart.output[id];
     if (outp.process && outp.process.exitCode === null) {
@@ -762,6 +822,29 @@ function getMetricsSnapshot() {
     return { inputs, outputs, hlsActive: Object.keys(hlsProcs).length };
 }
 
+// Procesos FFmpeg vivos de cada canal y salida, para medir su consumo (procStats.js)
+function getProcesses() {
+    const alive = p => p && p.exitCode === null && p.pid ? p.pid : null;
+    const list = [];
+    for (const channel in activeInputs) {
+        const inp = activeInputs[channel];
+        const pid = alive(inp.process);
+        if (pid) list.push({ kind: 'input', key: channel, pid });
+        const prev = alive(inp.prevProcess);
+        if (prev) list.push({ kind: 'preview', key: channel, pid: prev });
+    }
+    for (const channel in hlsProcs) {
+        const pid = alive(hlsProcs[channel].proc);
+        if (pid) list.push({ kind: 'hls', key: channel, pid });
+    }
+    for (const id in activeOutputs) {
+        const o = activeOutputs[id];
+        const pid = alive(o.process);
+        if (pid) list.push({ kind: 'output', key: id, channel: String(o.parentChannel), pid, pipeline: o.pipeline, scaleTo: o.scaleTo });
+    }
+    return list;
+}
+
 // Al parar el servicio (systemd/docker) cerrar los FFmpeg para no dejar procesos huérfanos
 function shutdown() {
     for (const channel in hlsProcs) stopHls(channel);
@@ -783,6 +866,8 @@ module.exports = {
     removeChannel,
     getTotalBitrates,
     getMetricsSnapshot,
+    getProcesses,
+    parseVideoLine,
     ensureHls,
     HLS_DIR,
     activeInputs,

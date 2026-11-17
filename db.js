@@ -79,6 +79,8 @@ function initDB() {
         db.run("ALTER TABLE outputs ADD COLUMN vcodec TEXT NOT NULL DEFAULT 'copy'", () => {});
         db.run("ALTER TABLE outputs ADD COLUMN was_enabled INTEGER NOT NULL DEFAULT 0", () => {});
         db.run("ALTER TABLE ports ADD COLUMN rtmpPort INTEGER NOT NULL DEFAULT 1935", () => {});
+        db.run("ALTER TABLE inputs ADD COLUMN cam_http_port INTEGER NOT NULL DEFAULT 0", () => {}); // web de la cámara (0 = 80)
+        db.run("ALTER TABLE outputs ADD COLUMN scale INTEGER NOT NULL DEFAULT 0", () => {});         // altura al transcodificar (0 = original)
 
         // Las salidas SRT creadas con la web antigua llevaban latency=200000 (200 ms), corto para estas redes
         // (macrobloques). Pasan a 500 ms. La web nueva ya no genera 200000, así que no pisa elecciones del usuario.
