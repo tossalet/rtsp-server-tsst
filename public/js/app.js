@@ -465,6 +465,16 @@ document.addEventListener('DOMContentLoaded', () => {
         logs.forEach(l => appendLogToViewer(l));
     }).catch(e => console.error("Error loading logs", e));
 
+    // Descarga del log por periodo (últimos 15 min, 1 h...). Cada navegador recuerda el último elegido.
+    const logRange = document.getElementById('log-range');
+    const logDownload = document.getElementById('log-download');
+    if (logRange && logDownload) {
+        try { const saved = localStorage.getItem('logRange'); if (saved !== null && logRange.querySelector(`option[value="${saved}"]`)) logRange.value = saved; } catch (e) {}
+        const syncLogLink = () => { logDownload.href = `/api/logs/download?minutes=${logRange.value}`; };
+        logRange.addEventListener('change', () => { syncLogLink(); try { localStorage.setItem('logRange', logRange.value); } catch (e) {} });
+        syncLogLink();
+    }
+
     // Socket listeners
     socket.on('server_log', (logEntry) => {
         appendLogToViewer(logEntry);
@@ -1754,7 +1764,7 @@ function outputUseText(o, u) {
         what = 'Copia directa' + (src ? ' · ' + resLabel(src) : '');
     } else {
         const target = o.scale && !(src && src.height <= o.scale) ? o.scale + 'p' : (src ? resLabel(src) : 'sin rescalar');
-        const pipe = u && u.pipeline ? ({ GPU: 'todo en GPU', 'CPU+GPU': 'decodifica CPU, codifica GPU', CPU: 'CPU' }[u.pipeline] || '') : '';
+        const pipe = u && u.pipeline ? ({ GPU: 'todo en GPU', 'CPU+GPU': 'decodifica CPU, codifica GPU', 'CPU+GPUenc': 'decodifica y escala CPU, codifica GPU', CPU: 'CPU' }[u.pipeline] || '') : '';
         what = `${OUTPUT_CODECS[vcodec] || vcodec} · ${src && target !== resLabel(src) ? resLabel(src) + ' → ' : ''}${target}${pipe ? ' · ' + pipe : ''}`;
     }
     if (!u) return `<i class="fa-solid fa-microchip"></i> ${escapeHtml(what)}`;

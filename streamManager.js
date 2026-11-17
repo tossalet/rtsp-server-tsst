@@ -13,7 +13,11 @@ const telemetryCache = {};
 // Contadores para /metrics (Prometheus). Se mantienen aunque el proceso se reinicie.
 const counters = { inputBytes: {}, inputRestarts: {}, outputRestarts: {} };
 const inputRate = {}; // canal -> bits/s medidos en Node (último segundo)
-const vaapiCpuDecode = {}; // salida -> true si la GPU no pudo decodificar su vídeo (se decodifica con CPU)
+// VAAPI: nivel de respaldo por salida si la GPU falla con ese vídeo.
+// 0 = todo en GPU · 1 = decodifica CPU, escala y codifica GPU · 2 = decodifica y escala CPU, codifica GPU
+const vaapiLevel = {};
+// Errores de la GPU. No vale "vaapi" a secas: la línea "Stream mapping ... (h264_vaapi)" sale también cuando funciona.
+const VAAPI_HW_ERROR = /hardware accelerator failed|scale_vaapi|hwupload|VAProfile|VA_STATUS|hw_frames|hwaccel.*(?:fail|error|not)|Failed setup|Impossible to convert|Device creation failed|No VA display|vaapi.*(?:error|failed|not supported)/i;
 
 // Distribución en memoria: cada canal tiene un "hub" (Set de stdin de FFmpeg).
 // El input escribe por stdout (pipe) y Node reparte los chunks a los stdin de outputs/preview.
@@ -544,8 +548,12 @@ function startOutput(outputObj) {
     const doScale = scaleH > 0 && !(srcVideo && srcVideo.height <= scaleH);
     const src10bit = !!(srcVideo && srcVideo.bits > 8);
     // VAAPI con decodificación también en la GPU: 4K H.265 -> 1080 H.264 casi sin CPU.
-    // Si el driver no puede decodificar ese vídeo, se vuelve solo a decodificar con CPU (vaapiCpuDecode).
-    const gpuDecode = isVAAPI && !vaapiCpuDecode[id];
+    // Si el driver no puede con ese vídeo, baja solo de nivel (vaapiLevel): primero decodifica la CPU,
+    // y si tampoco escala la GPU (VPP), escala la CPU. La codificación siempre sigue en la GPU.
+    let level = isVAAPI ? (vaapiLevel[id] || 0) : 0;
+    if (level === 1 && !doScale && !src10bit) level = 2; // sin escalar, 1 y 2 son lo mismo
+    const gpuDecode = isVAAPI && level === 0;
+    const gpuScale = isVAAPI && level <= 1;
 
     if (isVAAPI && gpuDecode) {
         args.push('-init_hw_device', 'vaapi=va:/dev/dri/renderD128', '-filter_hw_device', 'va',
@@ -563,11 +571,17 @@ function startOutput(outputObj) {
         // Decodifica GPU (o CPU) -> hwupload deja los fotogramas en la GPU -> scale_vaapi -> codifica GPU.
         // "nv12|vaapi" vale tanto si llegan ya en la GPU como si los decodificó la CPU.
         // UHD 630 solo admite CQP en VAAPI: -qp en vez de -b:v.
-        let vf = gpuDecode ? 'format=nv12|vaapi,hwupload' : 'format=nv12,hwupload';
-        if (doScale) vf += `,scale_vaapi=w=-2:h=${scaleH}:format=nv12`;
-        else if (gpuDecode && src10bit) vf += ',scale_vaapi=format=nv12'; // 10 bits -> 8 bits para H.264
-        pipeline = gpuDecode ? 'GPU' : 'CPU+GPU';
-        console.log(`[HW-ACCEL] VAAPI ${gpuDecode ? 'decodifica y codifica en GPU' : 'decodifica CPU, codifica GPU'}${doScale ? ', escala a ' + scaleH + 'p' : ''} -> ${vcodec}`);
+        let vf;
+        if (gpuScale) {
+            vf = gpuDecode ? 'format=nv12|vaapi,hwupload' : 'format=nv12,hwupload';
+            if (doScale) vf += `,scale_vaapi=w=-2:h=${scaleH}:format=nv12`;
+            else if (gpuDecode && src10bit) vf += ',scale_vaapi=format=nv12'; // 10 bits -> 8 bits para H.264
+        } else {
+            vf = (doScale ? `scale=-2:${scaleH}:flags=bilinear,` : '') + 'format=nv12,hwupload';
+        }
+        pipeline = gpuDecode ? 'GPU' : gpuScale ? 'CPU+GPU' : 'CPU+GPUenc';
+        const desc = { GPU: 'decodifica, escala y codifica en GPU', 'CPU+GPU': 'decodifica CPU, escala y codifica GPU', 'CPU+GPUenc': 'decodifica y escala CPU, codifica GPU' }[pipeline];
+        console.log(`[HW-ACCEL] VAAPI ${desc}${doScale ? ', a ' + scaleH + 'p' : ''} -> ${vcodec}`);
         args.push('-vf', vf);
         args.push('-c:v', vcodec, '-qp', '23', '-g', '50');
         args.push('-c:a', 'copy'); // el audio ya es AAC desde el input
@@ -634,6 +648,15 @@ function startOutput(outputObj) {
         const now = Date.now();
         const out = data.toString();
         errTail.push(out);
+        // ¿Ha llegado a codificar algún fotograma? ¿Ha habido errores de la GPU antes de eso?
+        if (!state.encoded) {
+            if (/frame=\s*[1-9]/.test(out)) state.encoded = true;
+            else if (isVAAPI && !state.hwError) {
+                // Las líneas [vost#/vf#/out#] solo repiten el nombre del códec: no cuentan como fallo de GPU
+                const bad = out.split(/\r?\n/).find(l => VAAPI_HW_ERROR.test(l.replace(/\[(?:vost|vf|out)#[^\]]*\]/g, '')));
+                if (bad) state.hwError = bad.trim().substring(0, 200);
+            }
+        }
 
         if (isHWCodec && (now - hwStartTime) < 20000) {
             out.split('\n').forEach(line => {
@@ -671,10 +694,13 @@ function startOutput(outputObj) {
         // Muerte inmediata = fallo de configuración (puerto ocupado, URL mala): esperar más y enseñar el error.
         // Si llevaba un rato, lo normal es que el receptor (Race Control) se haya desconectado: reabrir rápido.
         const failedFast = Date.now() - state.startedAt < 5000;
-        // La GPU no pudo decodificar este vídeo (perfil no soportado...): seguir decodificando con CPU
-        if (failedFast && gpuDecode && /vaapi|hwaccel|hw_frames|hwupload|VA_STATUS|Failed setup|Impossible to convert/i.test(errTail.text())) {
-            vaapiCpuDecode[id] = true;
-            console.error(`[OUT-${id}] La GPU no decodifica este vídeo; se decodificará con CPU. FFmpeg: ${maskCredentials(errTail.text())}`);
+        // La GPU falló antes de sacar ni un fotograma: bajar un nivel (no por tiempo: FFmpeg tarda ~5 s
+        // en analizar la entrada, así que el fallo llega después de los 5 s de failedFast).
+        if (isVAAPI && level < 2 && !state.encoded && state.hwError) {
+            vaapiLevel[id] = level + 1;
+            const next = level === 0 && (doScale || src10bit) ? 'decodificará la CPU (escala y codifica la GPU)'
+                : doScale ? 'decodificará y escalará la CPU (codifica la GPU)' : 'decodificará la CPU (codifica la GPU)';
+            console.error(`[OUT-${id}] La GPU no puede con este vídeo (${state.hwError}); ahora ${next}.`);
             state.autoRestart = setTimeout(() => {
                 if (activeOutputs[id] !== state) return;
                 delete activeOutputs[id];
@@ -701,7 +727,7 @@ function stopOutput(id) {
     if (!outp) return false;
     console.log(`[STOPPING OUTPUT ${id}] Stopping process...`);
     outp.intentionalStop = true;
-    delete vaapiCpuDecode[id]; // al editar o reactivar se vuelve a probar la GPU
+    delete vaapiLevel[id]; // al editar o reactivar se vuelve a probar todo en la GPU
     if (outp.autoRestart) clearTimeout(outp.autoRestart);
     delete pendingStart.output[id];
     if (outp.process && outp.process.exitCode === null) {

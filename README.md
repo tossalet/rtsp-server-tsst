@@ -60,8 +60,10 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
   trabaja con el panel abierto. Amarillo a partir del 40 %, rojo del 70 %.
 - **Rescalar** (editar salida → "Resolución de salida": 2160p, 1440p, 1080p, 720p) solo es posible transcodificando.
   Con **Intel VAAPI** el vídeo se decodifica, se escala y se codifica en la GPU integrada (UHD 630), casi sin CPU.
-  Si la GPU no puede decodificar un vídeo concreto, la salida pasa sola a decodificar con CPU y lo indica
-  ("decodifica CPU, codifica GPU"). Nunca se amplía: si la cámara manda menos, sale tal cual.
+  Si la GPU falla con un vídeo concreto antes de sacar imagen, la salida baja sola de nivel y lo indica en el log y en el panel:
+  1) todo en GPU → 2) decodifica la CPU, escala y codifica la GPU → 3) decodifica y escala la CPU, codifica la GPU.
+  Al editar o reactivar la salida se vuelve a probar todo en GPU. Nunca se amplía: si la cámara manda menos, sale tal cual.
+  Para ver qué admite la GPU: `vainfo | grep -iE "driver|HEVC|VideoProc"`.
   Por CPU (`libx264`) un 4K a 1080p ocupa varios núcleos: usar VAAPI.
 
 ## Codificación de la cámara (Hikvision y Dahua)
@@ -124,6 +126,7 @@ Además de cámaras RTSP, una entrada puede recibir una fuente **SRT** (y luego 
 ## Diagnóstico
 
 - Logs en vivo: `journalctl -u race-control -f` (o en el panel web).
+- Descargar el log desde el Dashboard: últimos 15 min, última hora, 6 h, 24 h o todo (las horas del log van en UTC).
 - Si una cámara o salida falla, el log muestra el error real de FFmpeg (`[IN-x] FFmpeg: ...` / `[OUT-x] FFmpeg: ...`), con las contraseñas ocultas.
 - Si una cámara deja de enviar sin cortar la conexión, el servidor la reconecta sola a los 20 s.
 - Si Race Control se desconecta, la salida SRT se reabre en 2 s.

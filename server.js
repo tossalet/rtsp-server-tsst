@@ -137,13 +137,41 @@ app.get('/api/logs', (req, res) => {
     res.json(logHistory);
 });
 
+// ?minutes=15 → solo los últimos 15 min (también mira server.log.old si el periodo empieza antes).
+// Sin minutes (o 0) → el fichero entero, como antes.
 app.get('/api/logs/download', (req, res) => {
-    if (fs.existsSync(logFile)) {
-        res.download(logFile, 'server_log.txt');
-    } else {
-        res.status(404).send("No log file found.");
+    const minutes = Math.min(parseInt(req.query.minutes, 10) || 0, 60 * 24 * 31);
+    const stamp = getTimestamp().replace(' ', '_').replace(/:/g, '').substring(0, 15);
+    if (!minutes) {
+        if (!fs.existsSync(logFile)) return res.status(404).send('No log file found.');
+        return res.download(logFile, `server_log_completo_${stamp}.txt`);
     }
+    const since = new Date(Date.now() - minutes * 60000).toISOString().replace('T', ' ').substring(0, 19);
+    const out = [];
+    for (const f of [logFile + '.old', logFile]) {
+        let text;
+        try { text = fs.readFileSync(f, 'utf8'); } catch (e) { continue; }
+        out.push(...filterLogSince(text, since));
+    }
+    const label = minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}min`;
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="server_log_ultimos_${label}_${stamp}.txt"`);
+    res.send(out.length ? out.join('\n') + '\n' : `Sin entradas en el log desde ${since} (UTC).\n`);
 });
+
+// Líneas con fecha >= since ("YYYY-MM-DD HH:MM:SS"). Las líneas sin fecha (mensajes de varias
+// líneas) siguen a la anterior. Se compara el texto: con este formato el orden alfabético es el temporal.
+function filterLogSince(text, since) {
+    const lines = text.split('\n');
+    let keep = false;
+    const res = [];
+    for (const line of lines) {
+        const m = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/.exec(line);
+        if (m) keep = m[1] >= since;
+        if (keep && line) res.push(line);
+    }
+    return res;
+}
 
 /* =======================================
  *  REST API: INPUTS

@@ -201,7 +201,16 @@
                 <div class="sys-card" style="margin-top: 1.5rem; border-color: rgba(96, 165, 250, 0.2);">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                         <h3 style="margin-bottom:0;"><i class="fa-solid fa-terminal"></i> Live System Logs</h3>
-                        <a href="/api/logs/download" target="_blank" class="btn-secondary" style="font-size:0.8rem; text-decoration:none;"><i class="fa-solid fa-download"></i> Download TXT</a>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <select id="log-range" title="Periodo a descargar" style="font-size:0.8rem; padding:4px 6px; background:#111; color:#d1d5db; border:1px solid rgba(255,255,255,0.15); border-radius:4px;">
+                                <option value="15">Últimos 15 min</option>
+                                <option value="60" selected>Última hora</option>
+                                <option value="360">Últimas 6 h</option>
+                                <option value="1440">Últimas 24 h</option>
+                                <option value="0">Todo</option>
+                            </select>
+                            <a id="log-download" href="/api/logs/download?minutes=60" class="btn-secondary" style="font-size:0.8rem; text-decoration:none;"><i class="fa-solid fa-download"></i> Download TXT</a>
+                        </div>
                     </div>
                     <div id="log-viewer" style="background:#0a0a0a; border:1px solid rgba(255,255,255,0.05); padding:12px; height:250px; overflow-y:auto; border-radius:6px; font-family:monospace; font-size:0.75rem; color:#d1d5db; line-height:1.5;">
                         <div style="color:var(--text-muted);">Waiting for logs...</div>
