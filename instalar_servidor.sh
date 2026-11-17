@@ -61,12 +61,25 @@ apt-get install -y --no-install-recommends \
     sqlite3 \
     iproute2 \
     curl \
-    intel-media-va-driver \
     vainfo \
     git \
     build-essential \
     python3 \
     chrony || fail "instalando paquetes del sistema"
+
+# Driver de la GPU Intel. El completo (non-free) escala y codifica en la GPU; el libre de Debian
+# no escala y en la UHD 630 solo codifica en bajo consumo. Los dos no pueden estar a la vez:
+# pedir el libre con el completo instalado lo desinstalaría, así que nunca se cambia el completo.
+if dpkg -s intel-media-va-driver-non-free >/dev/null 2>&1; then
+    echo "   Driver Intel completo (non-free): ya instalado."
+elif apt-cache policy intel-media-va-driver-non-free 2>/dev/null | grep -q "Candidate: [0-9]"; then
+    apt-get install -y intel-media-va-driver-non-free || apt-get install -y intel-media-va-driver || fail "instalando el driver Intel"
+else
+    apt-get install -y intel-media-va-driver || fail "instalando el driver Intel"
+    echo "   ⚠️  Driver Intel libre: no escala en la GPU. Para el completo, activar el repositorio non-free:"
+    echo "      echo 'deb http://deb.debian.org/debian $(. /etc/os-release; echo "$VERSION_CODENAME") non-free non-free-firmware' > /etc/apt/sources.list.d/non-free.list"
+    echo "      y volver a ejecutar este instalador."
+fi
 
 ffmpeg -hide_banner -protocols 2>/dev/null | grep -qw srt || fail "el FFmpeg instalado no soporta SRT"
 echo "✅ Dependencias del sistema instaladas (FFmpeg con SRT: OK)."
