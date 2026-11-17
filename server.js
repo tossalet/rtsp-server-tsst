@@ -698,7 +698,10 @@ io.on('connection', (socket) => {
 if (procStats.SUPPORTED) {
     setInterval(() => {
         if (!io.engine.clientsCount) return;
-        io.emit('proc_stats', procStats.collect(streamManager.getProcesses()));
+        const stats = procStats.collect(streamManager.getProcesses());
+        stats.gpuInfo = procStats.gpuInfo();
+        stats.gpuCaps = streamManager.getGpuCaps();
+        io.emit('proc_stats', stats);
     }, 2000);
 }
 

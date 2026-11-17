@@ -948,6 +948,7 @@ module.exports = {
     parseVideoLine,
     parseVaCaps,
     logGpuCaps,
+    getGpuCaps: () => vaCaps,
     _setVaCaps: c => { vaCaps = c; }, // pruebas
     ensureHls,
     HLS_DIR,

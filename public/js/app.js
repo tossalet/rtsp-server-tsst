@@ -1786,11 +1786,36 @@ function renderProcStats(d) {
         const c = d.channels[i.channel];
         el.innerHTML = c ? `<i class="fa-solid fa-gauge"></i> Consumo de esta cámara: <b class="${useClass(c.cpu)}">CPU ${fmtPct(c.cpu)}</b> · <b class="${useClass(c.gpu)}">GPU ${fmtPct(c.gpu)}</b>` : '';
     });
+    renderGpuCard(d);
     const tot = document.getElementById('proc-total');
     if (tot) {
         tot.hidden = false;
         tot.innerHTML = `<i class="fa-solid fa-microchip"></i> Vídeo (FFmpeg): <b class="${useClass(d.total.cpu)}">CPU ${fmtPct(d.total.cpu)}</b> · <b class="${useClass(d.total.gpu)}" title="Motor de vídeo ${d.total.gpuDetail.video} % · render ${d.total.gpuDetail.render} %">GPU Intel ${fmtPct(d.total.gpu)}</b>`;
     }
+}
+
+// Tarjeta "GPU Intel" del Dashboard: uso del motor más ocupado, cada motor, frecuencia y qué admite el driver
+function renderGpuCard(d) {
+    const num = document.getElementById('sys_gpu');
+    if (!num) return;
+    const info = d.gpuInfo, caps = d.gpuCaps, g = d.total.gpuDetail;
+    if (info && info.model) document.getElementById('sys_gpu_name').textContent = info.model;
+    num.textContent = fmtPct(d.total.gpu).replace(' %', '');
+    const bar = document.getElementById('sys_gpu_bar');
+    bar.style.width = Math.min(100, d.total.gpu) + '%';
+    bar.style.background = d.total.gpu >= 85 ? 'var(--color-red)' : d.total.gpu >= 60 ? 'var(--color-yellow)' : '#a78bfa';
+    const row = (label, value, title = '') => `<div class="gpu-row"${title ? ` title="${escapeHtml(title)}"` : ''}><span>${label}</span><b>${value}</b></div>`;
+    let html = row('Vídeo (dec. y cod.)', fmtPct(g.video), 'Motor de vídeo: decodificar y codificar H.264/H.265') +
+        row('Render (escalar)', fmtPct(g.render)) +
+        row('VPP', fmtPct(g.enhance));
+    if (info && info.freq != null) html += row('Frecuencia', `${info.freq}${info.freqMax ? ' / ' + info.freqMax : ''} MHz`);
+    if (caps) {
+        const full = caps.vpp && caps.encode.h264_vaapi;
+        const enc = caps.encode.h264_vaapi ? 'H.264' + (caps.encode.hevc_vaapi ? ', H.265' : '') : caps.encodeLP.h264_vaapi ? 'H.264 (bajo consumo)' : 'no';
+        html += row('Driver', full ? 'completo' : '<span style="color:var(--color-yellow)">libre</span>',
+            `Decodifica H.264 ${caps.decode['H.264'] ? 'sí' : 'no'} · H.265 ${caps.decode['H.265'] ? 'sí' : 'no'} · escala ${caps.vpp ? 'sí' : 'no'} · codifica ${enc}`);
+    }
+    document.getElementById('sys_gpu_rows').innerHTML = html;
 }
 
 // Rescalar solo tiene sentido transcodificando

@@ -673,3 +673,9 @@ input:checked + .slider:before { transform: translateX(18px); }
 .cam-hint { display: block; font-size: 0.75rem; color: var(--text-muted); line-height: 1.45; min-height: 1.1em; }
 #out_scale:disabled { opacity: 0.5; }
 .btn-primary:disabled, .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* Tarjeta GPU Intel del Dashboard */
+.gpu-rows { margin-top: 10px; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 3px; }
+.gpu-row { display: flex; justify-content: space-between; gap: 8px; }
+.gpu-row b { color: var(--text-main); font-weight: 600; white-space: nowrap; }
+.gpu-note { font-size: 0.75rem; }

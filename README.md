@@ -23,7 +23,7 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
 
 ## Lista de comprobación en el circuito
 
-1. `systemctl status race-control` → `active (running)`.
+1. `systemctl status rtsp-server-tsst` → `active (running)`.
 2. En el panel, cada cámara con LED verde y bitrate > 0.
 3. Cada salida SRT en modo **listener** con un **puerto distinto** (el panel rechaza puertos repetidos).
 4. Desde Race Control, conectar como **caller** a `srt://IP-DEL-MINI-PC:PUERTO`.
@@ -126,7 +126,7 @@ Además de cámaras RTSP, una entrada puede recibir una fuente **SRT** (y luego 
 
 ## Diagnóstico
 
-- Logs en vivo: `journalctl -u race-control -f` (o en el panel web).
+- Logs en vivo: `journalctl -u rtsp-server-tsst -f` (o en el panel web).
 - Descargar el log desde el Dashboard: últimos 15 min, última hora, 6 h, 24 h o todo (las horas del log van en UTC).
 - Si una cámara o salida falla, el log muestra el error real de FFmpeg (`[IN-x] FFmpeg: ...` / `[OUT-x] FFmpeg: ...`), con las contraseñas ocultas.
 - Si una cámara deja de enviar sin cortar la conexión, el servidor la reconecta sola a los 20 s.

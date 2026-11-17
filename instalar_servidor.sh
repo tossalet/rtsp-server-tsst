@@ -14,16 +14,18 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Carpeta del servidor: la misma donde está este script si es una copia del repositorio
-# (p.ej. ~/rtsp-server-tsst); si no, /opt/race-control-server. Se puede forzar con APP_DIR=...
+# (p.ej. ~/rtsp-server-tsst); si no, /opt/rtsp-server-tsst (o /opt/race-control-server si ya existe,
+# de instalaciones antiguas). Se puede forzar con APP_DIR=...
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "$APP_DIR" ]; then
     if [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/server.js" ]; then
         APP_DIR="$SCRIPT_DIR"
     else
-        APP_DIR="/opt/race-control-server"
+        if [ -d "/opt/race-control-server" ]; then APP_DIR="/opt/race-control-server"; else APP_DIR="/opt/rtsp-server-tsst"; fi
     fi
 fi
-SERVICE_NAME="race-control"
+SERVICE_NAME="rtsp-server-tsst"
+OLD_SERVICE="race-control" # nombre antiguo (el proyecto nació del servidor de Race Control)
 # La copia puede ser de otro usuario (carpeta personal): git no la rechaza como root
 git() { command git -c safe.directory="$APP_DIR" "$@"; }
 REPO_URL="https://github.com/tossalet/rtsp-server-tsst"
@@ -152,7 +154,8 @@ fi
 echo ""
 echo "🕒 [6/7] Configurando el mini PC como servidor de hora de la red local..."
 mkdir -p /etc/chrony/conf.d
-cat > /etc/chrony/conf.d/race-control.conf << 'EOF'
+rm -f /etc/chrony/conf.d/race-control.conf
+cat > /etc/chrony/conf.d/rtsp-server-tsst.conf << 'EOF'
 # Race Control: las cámaras de la red local se ponen en hora con este equipo.
 # Con internet se sincroniza con los servidores públicos; sin internet sigue sirviendo su reloj.
 allow 10.0.0.0/8
@@ -165,7 +168,8 @@ systemctl restart chrony && echo "✅ Servidor NTP activo (UDP 123)." || echo "�
 
 # Buffers de red: Debian limita a ~208 KB lo que libsrt puede pedir (pide 8 MB). Con varias cámaras
 # en ráfaga el kernel descarta paquetes UDP antes de que SRT los vea -> macrobloques.
-cat > /etc/sysctl.d/90-race-control.conf << 'EOF'
+rm -f /etc/sysctl.d/90-race-control.conf
+cat > /etc/sysctl.d/90-rtsp-server-tsst.conf << 'EOF'
 # Race Control: buffers de socket amplios para SRT/UDP con varias cámaras
 net.core.rmem_max = 26214400
 net.core.wmem_max = 26214400
@@ -173,7 +177,7 @@ net.core.rmem_default = 1048576
 net.core.wmem_default = 1048576
 net.core.netdev_max_backlog = 5000
 EOF
-sysctl -p /etc/sysctl.d/90-race-control.conf >/dev/null && echo "✅ Buffers de red ampliados para SRT." || echo "⚠️  No se pudieron aplicar los buffers de red."
+sysctl -p /etc/sysctl.d/90-rtsp-server-tsst.conf >/dev/null && echo "✅ Buffers de red ampliados para SRT." || echo "⚠️  No se pudieron aplicar los buffers de red."
 
 # ── Monitorización opcional: Prometheus (historial) + Grafana (gráficas) ──
 GRAFANA_ENV=""
@@ -249,9 +253,18 @@ fi
 echo ""
 echo "⚙️  [7/7] Configurando servicio del sistema (arranque automático)..."
 
+# Cambio de nombre: race-control -> rtsp-server-tsst. Se para y quita el servicio antiguo
+# (solo el servicio: la carpeta, data/ y la base de datos no se tocan).
+if [ -f "/etc/systemd/system/${OLD_SERVICE}.service" ]; then
+    systemctl stop "${OLD_SERVICE}" 2>/dev/null
+    systemctl disable "${OLD_SERVICE}" >/dev/null 2>&1
+    rm -f "/etc/systemd/system/${OLD_SERVICE}.service"
+    echo "   Servicio antiguo '${OLD_SERVICE}' sustituido por '${SERVICE_NAME}'."
+fi
+
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
-Description=Race Control Server (RTSP/SRT)
+Description=RTSP Server TSST (RTSP/SRT)
 Wants=network-online.target
 After=network-online.target
 

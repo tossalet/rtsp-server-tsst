@@ -98,10 +98,40 @@ function collect(processes) {
         }
     }
     for (const pid of prev.keys()) if (!alive.has(pid)) prev.delete(pid);
-    const fin = c => ({ cpu: round(c.cpu), gpu: round(Math.max(c.gpu.render, c.gpu.video, c.gpu.enhance)),
-        gpuDetail: { render: round(c.gpu.render), video: round(c.gpu.video), enhance: round(c.gpu.enhance) }, inputCpu: c.inputCpu });
+    const cap = x => round(Math.min(100, x)); // varios procesos en el mismo motor no pasan del 100 %
+    const fin = c => ({ cpu: round(c.cpu), gpu: cap(Math.max(c.gpu.render, c.gpu.video, c.gpu.enhance)),
+        gpuDetail: { render: cap(c.gpu.render), video: cap(c.gpu.video), enhance: cap(c.gpu.enhance) }, inputCpu: c.inputCpu });
     for (const ch in channels) channels[ch] = fin(channels[ch]);
     return { supported: true, cores: CORES, outputs, channels, total: fin(total) };
 }
 
-module.exports = { collect, readGpuEngines, readCpuTicks, SUPPORTED };
+// GPU Intel desde /sys (i915): modelo y frecuencia actual / máxima. null si no hay GPU Intel.
+const INTEL_MODELS = { '3e92': 'UHD Graphics 630', '3e91': 'UHD Graphics 630', '3e98': 'UHD Graphics 630', '3e9b': 'UHD Graphics 630',
+    '9bc5': 'UHD Graphics 630', '9bc8': 'UHD Graphics 630', '5912': 'HD Graphics 630', '3e93': 'UHD Graphics 610', '9ba8': 'UHD Graphics 610' };
+let gpuCard; // ruta /sys/class/drm/cardN, buscada una vez
+function findGpuCard() {
+    if (gpuCard !== undefined) return gpuCard;
+    gpuCard = null;
+    try {
+        for (const c of fs.readdirSync('/sys/class/drm').filter(n => /^card\d+$/.test(n))) {
+            const base = `/sys/class/drm/${c}`;
+            if (fs.readFileSync(`${base}/device/vendor`, 'utf8').trim() === '0x8086') { gpuCard = base; break; }
+        }
+    } catch (e) {}
+    return gpuCard;
+}
+function readNum(p) { try { return parseInt(fs.readFileSync(p, 'utf8'), 10); } catch (e) { return null; } }
+function gpuInfo() {
+    if (!SUPPORTED) return null;
+    const base = findGpuCard();
+    if (!base) return null;
+    let id = '';
+    try { id = fs.readFileSync(`${base}/device/device`, 'utf8').trim().replace(/^0x/, '').toLowerCase(); } catch (e) {}
+    return {
+        model: 'Intel ' + (INTEL_MODELS[id] || `GPU (${id || '?'})`),
+        freq: readNum(`${base}/gt_act_freq_mhz`) ?? readNum(`${base}/gt_cur_freq_mhz`),
+        freqMax: readNum(`${base}/gt_max_freq_mhz`) ?? readNum(`${base}/gt_RP0_freq_mhz`)
+    };
+}
+
+module.exports = { collect, gpuInfo, readGpuEngines, readCpuTicks, SUPPORTED };
