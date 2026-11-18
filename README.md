@@ -62,7 +62,7 @@ Panel web: `http://IP-DEL-MINI-PC:4000`
   Con **Intel VAAPI** el vídeo se decodifica, se escala y se codifica en la GPU integrada (UHD 630), casi sin CPU.
   Si la GPU falla con un vídeo concreto antes de sacar imagen, la salida baja sola de nivel y lo indica en el log y en el panel:
   1) todo en GPU → 2) decodifica la CPU, escala y codifica la GPU → 3) decodifica y escala la CPU, codifica la GPU.
-  Al editar o reactivar la salida se vuelve a probar todo en GPU. Nunca se amplía: si la cámara manda menos, sale tal cual.
+  Al editar o reactivar la salida se vuelve a probar todo en GPU. La salida sale a la altura elegida tanto si hay que reducir como ampliar; si la cámara ya manda esa altura, no se rescala.
   Para ver qué admite la GPU: `vainfo | grep -iE "VideoProc|EncSlice"`. El instalador pone el driver Intel completo
   (`intel-media-va-driver-non-free`, repositorio non-free) si está disponible: con el libre la GPU no escala.
   Por CPU (`libx264`) un 4K a 1080p ocupa varios núcleos: usar VAAPI.

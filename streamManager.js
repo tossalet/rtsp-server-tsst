@@ -573,10 +573,10 @@ function startOutput(outputObj) {
 
     const args = ['-hide_banner', '-y'];
 
-    // Rescalado (solo al transcodificar): altura de salida, 0 = la de la cámara. Nunca se amplía.
+    // Rescalado (solo al transcodificar): altura de salida, 0 = la de la cámara. Reduce o amplía según haga falta.
     const scaleH = vcodec === 'copy' ? 0 : (parseInt(outputObj.scale, 10) || 0);
     const srcVideo = activeInputs[channel] && activeInputs[channel].video;
-    const doScale = scaleH > 0 && !(srcVideo && srcVideo.height <= scaleH);
+    const doScale = scaleH > 0 && !(srcVideo && srcVideo.height === scaleH);
     const src10bit = !!(srcVideo && srcVideo.bits > 8);
     // VAAPI con decodificación también en la GPU: 4K H.265 -> 1080 H.264 casi sin CPU.
     // Si el driver no puede con ese vídeo, baja solo de nivel (vaapiLevel): primero decodifica la CPU,

@@ -1763,7 +1763,7 @@ function outputUseText(o, u) {
     if (vcodec === 'copy') {
         what = 'Copia directa' + (src ? ' · ' + resLabel(src) : '');
     } else {
-        const target = o.scale && !(src && src.height <= o.scale) ? o.scale + 'p' : (src ? resLabel(src) : 'sin rescalar');
+        const target = o.scale && !(src && src.height === o.scale) ? o.scale + 'p' : (src ? resLabel(src) : 'sin rescalar');
         const pipe = u && u.pipeline ? ({ GPU: 'todo en GPU', 'CPU+GPU': 'decodifica CPU, codifica GPU', 'CPU+GPUenc': 'decodifica y escala CPU, codifica GPU', CPU: 'CPU' }[u.pipeline] || '') : '';
         what = `${OUTPUT_CODECS[vcodec] || vcodec} · ${src && target !== resLabel(src) ? resLabel(src) + ' → ' : ''}${target}${pipe ? ' · ' + pipe : ''}`;
     }
